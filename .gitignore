@@ -1,0 +1,37 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+.DS_Store
+.idea/
+.vscode/
+
+node_modules/
+.astro/
+dist/
+.cache/
+
+# Local data caches — published artifacts go through Zenodo, not git
+data/
+*.parquet
+*.fits
+*.h5
+*.hdf5
+
+# Local environment
+.env
+.env.local

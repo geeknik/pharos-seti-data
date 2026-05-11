@@ -1,0 +1,236 @@
+# Hephaistos candidate registry
+#
+# The seven M-dwarf candidates with anomalous WISE W3/W4 infrared excess
+# identified in Suazo et al. (2024), "Project Hephaistos II: Dyson sphere
+# candidates from Gaia DR3, 2MASS, and WISE," MNRAS 531, 695-707
+# (https://doi.org/10.1093/mnras/stae1186).
+#
+# Source: Table 5 (DS candidates) and Table 7 (W1/W2 and W1/W3 offsets) of
+# Suazo et al. (2024).
+#
+# This file is the operational target of the Pharos v0.1 benchmark. The
+# pass criterion in pre_registration/v0.1_ir_benchmark.md §7 references
+# the labels assigned here.
+#
+# Status labels:
+#   contaminant_confirmed   — background contamination confirmed at
+#                              high resolution (e.g., e-MERLIN/EVN)
+#   contaminant_suspected   — radio-source offsets or other archival
+#                              evidence suggests background contamination;
+#                              high-resolution follow-up pending
+#   unresolved_stress_test  — no archival contamination evidence either
+#                              way; pipeline must not promote without
+#                              independent modality survival
+#
+# Schema notes:
+#   - distance_pc: from Bailer-Jones et al. (2021) EDR3 geometric distance
+#   - g_mag: Gaia DR3 phot_g_mean_mag
+#   - g_var: Gvar variability indicator (Vioque et al. 2020 definition)
+#   - ruwe: Gaia DR3 Renormalised Unit Weight Error
+#   - teff_k: Gaia DR3 GSP-Phot effective temperature (K)
+#   - ew_h_alpha_nm: Gaia DR3 pseudo-equivalent width of H-alpha (nm),
+#                    blank when not significantly detected
+#   - t_ds_k: best-fit Dyson sphere blackbody temperature from Suazo
+#             et al. fit (K)
+#   - gamma: best-fit DS covering factor (Suazo et al. 2024)
+#   - snr_w3, snr_w4: AllWISE photometric S/N in W3 and W4 bands
+#   - w1_w2_offset_arcsec_ra/dec: photocentre offset between W1 and W2
+#   - w1_w3_offset_arcsec_ra/dec: photocentre offset between W1 and W3
+#   - iris_100um_mjy_sr: IRIS 100 micron background level at source
+
+candidates:
+  - label: A
+    gaia_dr3_source_id: 3496509309189181184
+    distance_pc: 142.9
+    distance_pc_err: 1.0
+    g_mag: 15.99
+    g_var: 1.03
+    ruwe: 1.03
+    teff_k: null
+    ew_h_alpha_nm: 0.248
+    ew_h_alpha_err_nm: 0.076
+    t_ds_k: 138
+    t_ds_err_k: 6
+    gamma: 0.08
+    gamma_err: 0.01
+    snr_w3: 22.5
+    snr_w4: 16.6
+    w1_w2_offset_arcsec_ra: -0.25
+    w1_w2_offset_arcsec_dec: -0.01
+    w1_w3_offset_arcsec_ra: -0.03
+    w1_w3_offset_arcsec_dec: 0.33
+    iris_100um_mjy_sr: 4.77
+    status: contaminant_suspected
+    notes:
+      - "High proper motion (-88.7 mas/yr in dec, Suazo et al. 2024) explains the apparent shift across DSS/2MASS/WISE epochs; not a contamination signal in itself."
+      - "Suazo et al. (2024) Table 7 W1/W2 and W1/W3 offsets are within the Theissen & West (2017) distribution."
+    evidence:
+      - type: radio_source_offset_archival
+        reference: "Ren, Garrett & Siemion (2024)"
+        notes: "Cross-match with archival radio sources suggests potential background HOT DOG contamination; high-resolution follow-up pending."
+
+  - label: B
+    gaia_dr3_source_id: 4843191593270342656
+    distance_pc: 211.6
+    distance_pc_err: 3.5
+    g_mag: 17.71
+    g_var: 0.94
+    ruwe: 1.06
+    teff_k: 3574
+    ew_h_alpha_nm: null
+    ew_h_alpha_err_nm: null
+    t_ds_k: 275
+    t_ds_err_k: 40
+    gamma: 0.06
+    gamma_err: 0.008
+    snr_w3: 13.9
+    snr_w4: 3.8
+    w1_w2_offset_arcsec_ra: 0.40
+    w1_w2_offset_arcsec_dec: 0.31
+    w1_w3_offset_arcsec_ra: 3.21
+    w1_w3_offset_arcsec_dec: 0.06
+    iris_100um_mjy_sr: 1.34
+    status: contaminant_suspected
+    notes:
+      - "Suazo et al. (2024) Table 7: W1/W3 RA offset 3.21\" is the second-largest in the candidate set (after G's 5.59\") but remains within ~0.6 sigma of the Theissen & West (2017) distribution; not flagged as suspicious in Suazo et al."
+    evidence:
+      - type: radio_source_offset_archival
+        reference: "Ren, Garrett & Siemion (2024)"
+        notes: "Cross-match with archival radio sources suggests potential background HOT DOG contamination."
+
+  - label: C
+    gaia_dr3_source_id: 4649396037451459712
+    distance_pc: 219.4
+    distance_pc_err: 6.2
+    g_mag: 18.39
+    g_var: 0.90
+    ruwe: 1.21
+    teff_k: 3238
+    ew_h_alpha_nm: null
+    ew_h_alpha_err_nm: null
+    t_ds_k: 187
+    t_ds_err_k: 16
+    gamma: 0.14
+    gamma_err: 0.016
+    snr_w3: 10.5
+    snr_w4: 5.0
+    w1_w2_offset_arcsec_ra: 0.25
+    w1_w2_offset_arcsec_dec: -0.32
+    w1_w3_offset_arcsec_ra: -1.52
+    w1_w3_offset_arcsec_dec: -3.68
+    iris_100um_mjy_sr: 4.75
+    status: unresolved_stress_test
+    notes:
+      - "RUWE 1.21 is the highest in the candidate set; still below the 1.4 cut Suazo et al. (2024) applied."
+    evidence: []
+
+  - label: D
+    gaia_dr3_source_id: 2660349163149053824
+    distance_pc: 211.5
+    distance_pc_err: 5.8
+    g_mag: 17.66
+    g_var: 0.97
+    ruwe: 0.96
+    teff_k: 3473
+    ew_h_alpha_nm: null
+    ew_h_alpha_err_nm: null
+    t_ds_k: 178
+    t_ds_err_k: 20
+    gamma: 0.16
+    gamma_err: 0.03
+    snr_w3: 10.4
+    snr_w4: 4.8
+    w1_w2_offset_arcsec_ra: -0.31
+    w1_w2_offset_arcsec_dec: -0.12
+    w1_w3_offset_arcsec_ra: 0.60
+    w1_w3_offset_arcsec_dec: -0.09
+    iris_100um_mjy_sr: 4.17
+    status: unresolved_stress_test
+    evidence: []
+
+  - label: E
+    gaia_dr3_source_id: 3190232820489766656
+    distance_pc: 274.7
+    distance_pc_err: 6.1
+    g_mag: 17.00
+    g_var: 0.90
+    ruwe: 1.05
+    teff_k: 3556
+    ew_h_alpha_nm: 0.049
+    ew_h_alpha_err_nm: 0.100
+    t_ds_k: 180
+    t_ds_err_k: 26
+    gamma: 0.08
+    gamma_err: 0.02
+    snr_w3: 10.3
+    snr_w4: 3.6
+    w1_w2_offset_arcsec_ra: -0.09
+    w1_w2_offset_arcsec_dec: 0.48
+    w1_w3_offset_arcsec_ra: -1.15
+    w1_w3_offset_arcsec_dec: -0.38
+    iris_100um_mjy_sr: 4.45
+    status: unresolved_stress_test
+    evidence: []
+
+  - label: F
+    gaia_dr3_source_id: 2956570141274256512
+    distance_pc: 265.0
+    distance_pc_err: 2.6
+    g_mag: 16.32
+    g_var: 0.93
+    ruwe: 1.01
+    teff_k: 3674
+    ew_h_alpha_nm: 0.020
+    ew_h_alpha_err_nm: 0.068
+    t_ds_k: 137
+    t_ds_err_k: 16
+    gamma: 0.03
+    gamma_err: 0.008
+    snr_w3: 5.7
+    snr_w4: 4.5
+    w1_w2_offset_arcsec_ra: 0.03
+    w1_w2_offset_arcsec_dec: 0.10
+    w1_w3_offset_arcsec_ra: -1.04
+    w1_w3_offset_arcsec_dec: 0.79
+    iris_100um_mjy_sr: 1.78
+    status: unresolved_stress_test
+    evidence: []
+
+  - label: G
+    gaia_dr3_source_id: 2644370304260053376
+    distance_pc: 249.9
+    distance_pc_err: 3.7
+    g_mag: 16.48
+    g_var: 0.99
+    ruwe: 1.01
+    teff_k: 3480
+    ew_h_alpha_nm: 0.024
+    ew_h_alpha_err_nm: 0.097
+    t_ds_k: 100
+    t_ds_err_k: 9
+    gamma: 0.13
+    gamma_err: 0.03
+    snr_w3: 5.0
+    snr_w4: 3.5
+    w1_w2_offset_arcsec_ra: 0.24
+    w1_w2_offset_arcsec_dec: 0.00
+    w1_w3_offset_arcsec_ra: 5.59
+    w1_w3_offset_arcsec_dec: 0.64
+    iris_100um_mjy_sr: 2.92
+    status: contaminant_confirmed
+    notes:
+      - "Suazo et al. (2024) themselves flag G as suspicious based on the W1/W3 RA offset (5.59\" vs Theissen & West 2017 distribution mu=-0.21\" sigma=5.48\"). This single-paper flag was the strongest internal signal of contamination among the seven candidates."
+    evidence:
+      - type: photometric_offset_anomaly
+        reference: "Suazo et al. (2024) Table 7"
+        notes: "W1/W3 RA offset 5.59\" — the largest in the candidate set and approximately 1 sigma above the Theissen & West (2017) quasar offset distribution, motivating high-resolution radio follow-up."
+      - type: background_AGN_high_resolution_radio
+        reference: "MNRAS Letters (e-MERLIN/EVN follow-up)"
+        notes: "Radio emission resolves into compact background components with brightness temperature characteristic of a radio-loud AGN; no radio emission detected at the M-dwarf Gaia position. The mid-IR excess previously attributed to candidate G is confirmed background AGN contamination."
+
+# Source-paper provenance
+source:
+  citation: "Suazo, M., Zackrisson, E., Mahto, P. K., Lundell, F., Nettelblad, C., Korn, A. J., Wright, J. T., Majumdar, S. (2024). Project Hephaistos II: Dyson sphere candidates from Gaia DR3, 2MASS, and WISE. MNRAS, 531, 695-707."
+  doi: "10.1093/mnras/stae1186"
+  data_origin: "Table 5 (candidate properties), Table 6 (IRIS 100 micron background levels), Table 7 (WISE photocentre offsets)"
+  retrieved: "2026-05-10"

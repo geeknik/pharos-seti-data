@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+title: "Pharos: A Cross-Modal Archival SETI Ranking Framework"
+message: "If you use Pharos, please cite both the software release (via the Zenodo DOI for the version used) and the methodology manuscript."
+type: software
+authors:
+  - name: "Pharos maintainers"
+repository-code: "https://github.com/geeknik/pharos-seti-data"
+url: "https://pharos-seti.org"
+license: Apache-2.0
+abstract: >-
+  Pharos is a versioned public instrument for ranking sky objects by
+  calibrated, independent anomaly evidence across archival astronomical
+  surveys. Gaia DR3 serves as the source spine, with modality layers
+  from WISE/AllWISE infrared photometry, time-domain photometry,
+  spectral residuals, optical pulse detection, Breakthrough Listen and
+  COSMIC radio archives, planetary architecture, and event-geometry
+  priors. Output is a re-observation priority catalog, not a
+  technosignature detection claim.
+keywords:
+  - SETI
+  - technosignatures
+  - archival astronomy
+  - Gaia DR3
+  - WISE
+  - Breakthrough Listen
+version: 0.1.0-dev
+date-released: 2026-05-10

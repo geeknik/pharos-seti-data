@@ -106,23 +106,24 @@ _SELECT_COLUMNS: tuple[str, ...] = (
     "awbn.number_of_neighbours AS wise_xm_n_neighbours",
     "awbn.number_of_mates AS wise_xm_n_mates",
     "awbn.xm_flag AS wise_xm_flag",
-    # AllWISE photometry
+    # AllWISE photometry. The Gaia-hosted AllWISE table does not expose
+    # per-band SNR or nb columns; SNR is derived from the magnitude
+    # uncertainty via Pogson's law (snr ~= 1.0857 / mag_error).
     "aw.designation AS allwise_designation",
     "aw.w1mpro",
     "aw.w1mpro_error",
-    "aw.w1snr",
+    "(1.0857 / aw.w1mpro_error) AS w1snr",
     "aw.w2mpro",
     "aw.w2mpro_error",
-    "aw.w2snr",
+    "(1.0857 / aw.w2mpro_error) AS w2snr",
     "aw.w3mpro",
     "aw.w3mpro_error",
-    "aw.w3snr",
+    "(1.0857 / aw.w3mpro_error) AS w3snr",
     "aw.w4mpro",
     "aw.w4mpro_error",
-    "aw.w4snr",
+    "(1.0857 / aw.w4mpro_error) AS w4snr",
     "aw.cc_flags AS allwise_cc_flags",
-    "aw.ext_flg AS allwise_ext_flg",
-    "aw.nb AS allwise_nb",
+    "aw.ext_flag AS allwise_ext_flg",
     # 2MASS crossmatch and photometry (NIR anchor for the photosphere fit)
     "tmbn.angular_distance AS tmass_xm_angular_distance",
     "tm.designation AS tmass_designation",
@@ -166,7 +167,7 @@ def _build_join_clause() -> str:
         "ON awbn.original_ext_source_id = aw.designation\n"
         f"  LEFT JOIN {TMASS_XMATCH_TABLE} AS tmbn ON gs.source_id = tmbn.source_id\n"
         f"  LEFT JOIN {TMASS_PHOTO_TABLE} AS tm "
-        "ON tmbn.original_psc_source_id = tm.designation"
+        "ON tmbn.original_ext_source_id = tm.designation"
     )
 
 
@@ -196,9 +197,11 @@ def build_quiet_negative_adql(limit: int | None = None) -> str:
         f"1000.0 / gs.parallax <= {cov['distance_pc_max']}",
         f"awbn.angular_distance IS NOT NULL",
         f"awbn.angular_distance <= {qn['allwise_angular_distance_max_arcsec']}",
-        f"aw.w1snr >= {cov['w1_snr_min']}",
-        f"aw.w2snr >= {cov['w2_snr_min']}",
-        f"aw.w3snr >= {cov['w3_snr_min']}",
+        # SNR thresholds expressed as magnitude-error upper bounds (Pogson):
+        #   snr >= N  <=>  mag_error <= 1.0857 / N
+        f"aw.w1mpro_error <= {1.0857 / cov['w1_snr_min']:.6f}",
+        f"aw.w2mpro_error <= {1.0857 / cov['w2_snr_min']:.6f}",
+        f"aw.w3mpro_error <= {1.0857 / cov['w3_snr_min']:.6f}",
         # Quiet-negative additional cuts
         f"gs.ruwe < {qn['ruwe_max']}",
         f"gs.duplicated_source = 'false'",
@@ -212,7 +215,7 @@ def build_quiet_negative_adql(limit: int | None = None) -> str:
         f"tmbn.angular_distance <= {qn['tmass_angular_distance_max_arcsec']}",
         # AllWISE contamination flags must be clean in W1/W2/W3.
         "(aw.cc_flags IS NULL OR aw.cc_flags = '0000')",
-        "(aw.ext_flg IS NULL OR aw.ext_flg = 0)",
+        "(aw.ext_flag IS NULL OR aw.ext_flag = 0)",
     ]
 
     where_block = "\n  AND ".join(where_clauses)

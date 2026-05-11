@@ -192,15 +192,32 @@ def test_candidate_g_is_discard_confounded(classifications: dict[str, dict]) -> 
     )
 
 
-@pytest.mark.parametrize("label", ["A", "B"])
-def test_suspected_candidates_demoted(
-    classifications: dict[str, dict], label: str
-) -> None:
-    """Pass: A and B land in discard_confounded or needs_human_review."""
-    cand = classifications.get(label)
-    assert cand is not None, f"candidate {label} missing from pipeline output"
+def test_candidate_b_demoted(classifications: dict[str, dict]) -> None:
+    """Pass: candidate B lands in discard_confounded or needs_human_review.
+
+    B is flagged via its W1<->W3 photocentre offset (3.21" RA per Suazo
+    et al. 2024 Table 7).
+    """
+    cand = classifications.get("B")
+    assert cand is not None, "candidate B missing from pipeline output"
     assert cand["class"] in {"discard_confounded", "needs_human_review"}, (
-        f"v0.1 failed to demote suspected contaminant {label}: {cand}"
+        f"v0.1 failed to demote suspected contaminant B: {cand}"
+    )
+
+
+def test_candidate_a_not_promoted(classifications: dict[str, dict]) -> None:
+    """Pass: candidate A is not auto-promoted to ir_followup.
+
+    A's contamination evidence is from archival radio cross-match (Ren,
+    Garrett & Siemion 2024), not the IR layer. Full demotion of A
+    requires the radio modality (v0.3); the v0.1 pass criterion is the
+    softer bar that A is not promoted to top-tier IR follow-up. See
+    pre_registration/v0.1_ir_benchmark.md §7.
+    """
+    cand = classifications.get("A")
+    assert cand is not None, "candidate A missing from pipeline output"
+    assert cand["class"] != "ir_followup", (
+        f"v0.1 auto-promoted A despite its non-IR contamination evidence: {cand}"
     )
 
 

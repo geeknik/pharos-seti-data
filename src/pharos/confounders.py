@@ -34,6 +34,7 @@ BETA_WEIGHTS: dict[str, float] = {
     "hot_dog": 2.5,
     "bad_flag": 2.0,
     "nss": 1.0,
+    "wise_offset": 5.0,
 }
 
 # Distance scale for the P_blend angular term. Pre-registered.
@@ -47,6 +48,12 @@ LOW_LAT_TAPER_DEG: float = 20.0
 HOT_DOG_FAINT_G_THRESHOLD: float = 17.0  # mag
 HOT_DOG_BRIGHT_W3_THRESHOLD: float = 12.0  # mag
 HOT_DOG_BRIGHT_W4_THRESHOLD: float = 9.0  # mag
+
+# W1<->W3 photocentre offset scale (arcsec). Pre-registered.
+# An offset of 6" yields P_wise_offset = 1.0; the Theissen & West (2017)
+# quasar offset distribution has sigma_RA ~ 5.48", so a ~1 sigma RA
+# outlier (e.g., candidate G at 5.59") maps to P ~ 0.93.
+WISE_OFFSET_SCALE_ARCSEC: float = 6.0
 
 
 _COMPONENT_KEYS: tuple[str, ...] = tuple(BETA_WEIGHTS.keys())
@@ -171,6 +178,28 @@ def _component_nss(df: pd.DataFrame) -> pd.Series:
     return (nss.fillna(0).astype(int) > 0).astype(float)
 
 
+def _component_wise_offset(df: pd.DataFrame) -> pd.Series:
+    """W1<->W3 photocentre offset as a contamination probability.
+
+    Reads optional input columns ``w1_w3_offset_arcsec_ra`` and
+    ``w1_w3_offset_arcsec_dec``. When neither is present, returns zeros
+    (the general-population case where no per-band offset measurement
+    is available in v0.1). When present, returns ``min(1, mag/6.0)``
+    where mag is the quadrature sum of the two offsets in arcseconds.
+
+    See pre_registration/v0.1_ir_benchmark.md §5 for the scale and the
+    rationale (Theissen & West 2017 quasar offset distribution).
+    """
+    ra_off = df.get("w1_w3_offset_arcsec_ra")
+    dec_off = df.get("w1_w3_offset_arcsec_dec")
+    if ra_off is None and dec_off is None:
+        return pd.Series(np.zeros(len(df)), index=df.index)
+    ra = ra_off.fillna(0.0) if ra_off is not None else pd.Series(0.0, index=df.index)
+    dec = dec_off.fillna(0.0) if dec_off is not None else pd.Series(0.0, index=df.index)
+    magnitude = np.sqrt(ra**2 + dec**2)
+    return (magnitude / WISE_OFFSET_SCALE_ARCSEC).clip(lower=0.0, upper=1.0)
+
+
 _COMPONENT_FUNCTIONS = {
     "blend": _component_blend,
     "galaxy": _component_galaxy,
@@ -179,6 +208,7 @@ _COMPONENT_FUNCTIONS = {
     "hot_dog": _component_hot_dog,
     "bad_flag": _component_bad_flag,
     "nss": _component_nss,
+    "wise_offset": _component_wise_offset,
 }
 
 

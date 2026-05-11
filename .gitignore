@@ -35,3 +35,9 @@ data/
 # Local environment
 .env
 .env.local
+
+# Credentials — never commit, even if accidentally copied into the repo
+gaia_credentials*
+*credentials.txt
+*credentials.toml
+secrets/

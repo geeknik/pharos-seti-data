@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -30,6 +32,17 @@ from typing import Iterable
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+# Credential file paths checked in order. The first existing, mode-600
+# file is used; everything else falls back to anonymous access. Path
+# resolution is centralised here so it stays out of the call paths.
+_GAIA_CREDENTIALS_PATHS: tuple[Path, ...] = (
+    Path.home() / ".config" / "pharos" / "gaia_credentials.txt",
+)
+
+# Module-level flag so we attempt login at most once per process. The
+# value is one of {"unknown", "anonymous", "authenticated"}.
+_login_state: str = "unknown"
 
 # ---------------------------------------------------------------------------
 # Gaia archive table names (Gaia DR3 release).
@@ -299,21 +312,133 @@ def _save_cached_result(cache_path: Path, result: SourceQueryResult) -> None:
     )
 
 
+_TAP_MAX_RETRIES = 5
+_TAP_RETRY_BACKOFF_SECONDS = (5, 15, 30, 60, 120)
+
+
+def _resolve_credentials_path() -> Path | None:
+    """Return the first usable credentials path or None.
+
+    Honours the PHAROS_GAIA_CREDENTIALS environment variable as an
+    override. Otherwise checks the default search path. Files that are
+    group- or world-readable are rejected to avoid using a credential
+    that may have leaked into a shared workspace.
+    """
+    override = os.environ.get("PHAROS_GAIA_CREDENTIALS")
+    candidates: tuple[Path, ...]
+    if override:
+        candidates = (Path(override).expanduser(),)
+    else:
+        candidates = _GAIA_CREDENTIALS_PATHS
+    for path in candidates:
+        if not path.exists() or not path.is_file():
+            continue
+        mode = path.stat().st_mode
+        if mode & (stat.S_IRWXG | stat.S_IRWXO):
+            logger.warning(
+                "ignoring credentials file %s: must be mode 600 (user-only)",
+                path,
+            )
+            continue
+        return path
+    return None
+
+
+def _maybe_login() -> None:
+    """Attempt Gaia login from a credentials file. No-op on failure.
+
+    Called at most once per process via the ``_login_state`` flag. Errors
+    are logged but never raise — the caller is allowed to continue in
+    anonymous mode if authentication is unavailable.
+    """
+    global _login_state
+    if _login_state != "unknown":
+        return
+
+    path = _resolve_credentials_path()
+    if path is None:
+        _login_state = "anonymous"
+        logger.debug("no Gaia credentials file found; running anonymously")
+        return
+
+    try:
+        from astroquery.gaia import Gaia  # type: ignore[import-untyped]
+
+        Gaia.login(credentials_file=str(path), verbose=False)
+        _login_state = "authenticated"
+        logger.info("Gaia authenticated session active")
+    except Exception as exc:  # noqa: BLE001 — log only, never expose creds
+        _login_state = "anonymous"
+        logger.warning(
+            "Gaia login failed (%s); falling back to anonymous", type(exc).__name__
+        )
+
+
 def _execute_tap_query(query_text: str) -> pd.DataFrame:
     """Submit ADQL to the Gaia archive and return rows as a DataFrame.
 
     Imports astroquery lazily so the rest of this module can be imported
     in environments that do not have astroquery installed (e.g., CI for
     pure-logic tests).
-    """
-    from astroquery.gaia import Gaia  # type: ignore[import-untyped]
 
-    logger.info("submitting Gaia TAP query (%d chars)", len(query_text))
-    job = Gaia.launch_job_async(query_text, dump_to_file=False)
-    table = job.get_results()
-    df = table.to_pandas()
-    logger.info("query returned %d rows", len(df))
-    return df
+    Retries transient connection errors (TLS resets, ECONNRESET, transient
+    HTTP errors) with an exponential-style backoff before giving up. The
+    Gaia archive is unstable during the DR4 transition.
+    """
+    import time
+
+    from astroquery.gaia import Gaia  # type: ignore[import-untyped]
+    from requests.exceptions import (  # type: ignore[import-untyped]
+        ConnectionError as RequestsConnectionError,
+    )
+    from requests.exceptions import HTTPError as RequestsHTTPError
+
+    transient_errors: tuple[type[BaseException], ...] = (
+        ConnectionResetError,
+        ConnectionError,
+        TimeoutError,
+        RequestsConnectionError,
+        RequestsHTTPError,
+        OSError,
+    )
+
+    _maybe_login()
+    logger.info(
+        "submitting Gaia TAP query (%d chars, session=%s)",
+        len(query_text),
+        _login_state,
+    )
+    last_error: BaseException | None = None
+    for attempt in range(1, _TAP_MAX_RETRIES + 1):
+        try:
+            job = Gaia.launch_job_async(query_text, dump_to_file=False)
+            table = job.get_results()
+            df = table.to_pandas()
+            logger.info(
+                "query returned %d rows (attempt %d)", len(df), attempt
+            )
+            return df
+        except transient_errors as exc:
+            last_error = exc
+            if attempt >= _TAP_MAX_RETRIES:
+                logger.error(
+                    "Gaia TAP query failed after %d attempts: %s",
+                    _TAP_MAX_RETRIES,
+                    exc,
+                )
+                raise
+            backoff = _TAP_RETRY_BACKOFF_SECONDS[
+                min(attempt - 1, len(_TAP_RETRY_BACKOFF_SECONDS) - 1)
+            ]
+            logger.warning(
+                "Gaia TAP transient error on attempt %d (%s); sleeping %ds",
+                attempt,
+                type(exc).__name__,
+                backoff,
+            )
+            time.sleep(backoff)
+    # Unreachable — the loop above either returns or raises.
+    raise RuntimeError("unreachable") from last_error
 
 
 def fetch_quiet_negative_controls(

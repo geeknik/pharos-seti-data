@@ -27,7 +27,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from pharos import fdr_report, injection, ir_sed, sources
+from pharos import calibration, contaminants, fdr_report, injection, ir_sed, sources, xray
 
 logger = logging.getLogger("pharos.cli")
 
@@ -115,6 +115,103 @@ def cmd_run_injection_recovery(args: argparse.Namespace) -> int:
         result.injection_pool_size,
     )
     print(result.summary.to_string(index=False))
+    return 0
+
+
+def cmd_run_calibration(args: argparse.Namespace) -> int:
+    contaminants_path = Path(args.contaminants).resolve()
+    controls_path = Path(args.controls).resolve()
+    output_path = Path(args.output).resolve()
+    pre_reg_path = Path(args.pre_registration).resolve()
+
+    for path, label in [
+        (contaminants_path, "contaminants"),
+        (controls_path, "controls"),
+        (pre_reg_path, "pre_registration"),
+    ]:
+        if not path.exists():
+            logger.error("missing %s fixture: %s", label, path)
+            return 1
+
+    contam_df = pd.read_parquet(contaminants_path)
+    controls_df = pd.read_parquet(controls_path)
+
+    # Sources that survive the X-ray cross-match are augmented with the
+    # xray_any_detection / xray_coverage_count columns. When the
+    # cross-match cache exists, we left-join it onto both populations so
+    # the v0.1.1 HOT DOG component sees the X-ray data during the fit.
+    xray_dir = Path(args.xray_dir).resolve() if args.xray_dir else None
+    if xray_dir and xray_dir.exists():
+        xray_summary = xray.load_xray_crossmatch(xray_dir).summary
+        contam_df = contam_df.merge(xray_summary, on="gaia_dr3_source_id", how="left")
+        controls_df = controls_df.merge(xray_summary, on="gaia_dr3_source_id", how="left")
+        logger.info("merged X-ray summary onto contaminants and controls")
+
+    result = calibration.calibrate_betas(
+        contam_df, controls_df, random_state=args.seed
+    )
+    calibration.write_calibration_yaml(
+        result,
+        output_path=output_path,
+        contaminants_path=contaminants_path,
+        controls_path=controls_path,
+        pre_reg_path=pre_reg_path,
+    )
+    print(f"Calibrated β (train_loss={result.train_loss:.4f}, accuracy={result.train_accuracy:.3f}):")
+    for name, val in result.betas.items():
+        marker = "" if val > 0 else "  [clipped to 0]"
+        print(f"  {name:18s} {val:7.3f}{marker}")
+    return 0
+
+
+def cmd_fetch_contaminants(args: argparse.Namespace) -> int:
+    import yaml as _yaml
+
+    output_dir = Path(args.output_dir).resolve()
+    result = contaminants.fetch_contaminants_positive(
+        hephaistos_yaml=Path(args.hephaistos_yaml).resolve(),
+        hephaistos_join_cache=Path(args.hephaistos_join).resolve(),
+        quiet_negative_cache=Path(args.quiet_negative).resolve(),
+        output_dir=output_dir,
+        skip_million_quasars=args.skip_million_quasars,
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    result.sources.to_parquet(output_dir / "contaminants.parquet", index=False)
+    with open(output_dir / "manifest.yaml", "w", encoding="utf-8") as f:
+        _yaml.safe_dump(result.manifest, f, sort_keys=False)
+    logger.info(
+        "contaminants saved: %s (n=%d)",
+        output_dir / "contaminants.parquet",
+        len(result.sources),
+    )
+    return 0
+
+
+def cmd_fetch_xray(args: argparse.Namespace) -> int:
+    input_path = Path(args.input).resolve()
+    output_dir = Path(args.output_dir).resolve()
+    if not input_path.exists():
+        logger.error("input cache not found: %s", input_path)
+        return 1
+
+    df = pd.read_parquet(input_path)
+    # Pull only the columns the X-ray cross-match needs.
+    required = ["gaia_dr3_source_id", "ra", "dec", "galactic_l"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        logger.error("input dataframe missing columns: %s", missing)
+        return 2
+    positions = df[required].copy()
+
+    catalogs = tuple(args.catalogs) if args.catalogs else tuple(xray.XRAY_CATALOGS.keys())
+    result = xray.fetch_xray_crossmatch(positions, catalogs=catalogs)
+    xray.save_xray_crossmatch(result, output_dir)
+    logger.info(
+        "X-ray cross-match saved: %s (sources=%d, with_detection=%d)",
+        output_dir,
+        len(result.summary),
+        int(result.summary["xray_any_detection"].sum()),
+    )
     return 0
 
 
@@ -255,6 +352,75 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fdr.add_argument("--seed", type=int, default=0)
     fdr.set_defaults(func=cmd_run_fdr_report)
+
+    xr = subparsers.add_parser(
+        "fetch_xray",
+        help="X-ray cross-match input positions against 2RXS/XMM/eROSITA/Chandra.",
+    )
+    xr.add_argument(
+        "--input",
+        required=True,
+        help="Parquet with columns gaia_dr3_source_id, ra, dec, galactic_l.",
+    )
+    xr.add_argument(
+        "--output-dir",
+        default="controls/cache/xray",
+        help="Directory for xray_summary.parquet and xray_matches.parquet.",
+    )
+    xr.add_argument(
+        "--catalogs",
+        nargs="+",
+        choices=list(xray.XRAY_CATALOGS.keys()),
+        help="Subset of catalogs to query (default: all four).",
+    )
+    xr.set_defaults(func=cmd_fetch_xray)
+
+    con = subparsers.add_parser(
+        "fetch_contaminants",
+        help="Build the v0.1.1 contaminant_positive control set.",
+    )
+    con.add_argument("--hephaistos-yaml", default="controls/hephaistos.yaml")
+    con.add_argument("--hephaistos-join", default="controls/cache/hephaistos_join.parquet")
+    con.add_argument("--quiet-negative", default="controls/cache/quiet_negative.parquet")
+    con.add_argument("--output-dir", default="controls/contaminant_positive")
+    con.add_argument(
+        "--skip-million-quasars",
+        action="store_true",
+        help="Skip the Million Quasars fetch (rarely yields any v0.1-coverage sources).",
+    )
+    con.set_defaults(func=cmd_fetch_contaminants)
+
+    cal = subparsers.add_parser(
+        "run_calibration",
+        help="Fit non-negative L2 logistic regression β on contaminants vs quiet-negative.",
+    )
+    cal.add_argument(
+        "--contaminants",
+        default="controls/contaminant_positive/contaminants.parquet",
+        help="Path to the contaminant_positive parquet.",
+    )
+    cal.add_argument(
+        "--controls",
+        default="controls/cache/quiet_negative.parquet",
+        help="Path to the quiet-negative parquet.",
+    )
+    cal.add_argument(
+        "--xray-dir",
+        default="controls/cache/xray",
+        help="Directory with xray_summary.parquet (omit to skip X-ray merge).",
+    )
+    cal.add_argument(
+        "--output",
+        default="controls/calibrated_betas_v0.1.1.yaml",
+        help="Where to write the calibration artifact.",
+    )
+    cal.add_argument(
+        "--pre-registration",
+        default="pre_registration/v0.1.1_calibrated_betas_and_xray_hot_dog.md",
+        help="Path to the frozen v0.1.1 pre-reg (for provenance hash).",
+    )
+    cal.add_argument("--seed", type=int, default=calibration.RANDOM_STATE)
+    cal.set_defaults(func=cmd_run_calibration)
 
     hef = subparsers.add_parser(
         "fetch_hephaistos",

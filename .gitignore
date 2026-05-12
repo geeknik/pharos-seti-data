@@ -41,6 +41,7 @@ data/
 !controls/calibration_positive/**
 !controls/contaminant_confirmed/**
 !controls/contaminant_suspected/**
+!controls/contaminant_positive/**
 !controls/quiet_negative/**
 
 # Local environment

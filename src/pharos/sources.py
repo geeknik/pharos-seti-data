@@ -727,15 +727,75 @@ def fetch_quiet_negative_controls(
     return result
 
 
+# Maximum source IDs per IN-list query. Empirically the Gaia archive
+# rejects single ADQL queries with ~100K+ characters during the DR4
+# transition; 500 IDs is a comfortable margin (~10K char query).
+_TARGET_QUERY_CHUNK_SIZE: int = 500
+
+
+def _build_gaia_by_ids_adql(ids: list[int]) -> str:
+    """SELECT from gaia_source WHERE source_id IN (...). Single-table, no joins."""
+    select_clause = ",\n  ".join(_GAIA_SOURCE_COLUMNS)
+    id_str = ", ".join(str(sid) for sid in ids)
+    return (
+        "SELECT\n  "
+        + select_clause
+        + f"\nFROM {GAIA_SOURCE_TABLE}\nWHERE source_id IN ({id_str})"
+    )
+
+
+def _build_allwise_by_ids_unfiltered(ids: list[int]) -> str:
+    """AllWISE join for explicit IDs, no SNR/coverage cuts applied."""
+    select_clause = ",\n  ".join(_ALLWISE_COLUMNS)
+    id_str = ", ".join(str(sid) for sid in ids)
+    return (
+        "SELECT\n  "
+        + select_clause
+        + f"\nFROM {ALLWISE_XMATCH_TABLE} AS awbn"
+        + f"\n  INNER JOIN {ALLWISE_PHOTO_TABLE} AS aw"
+        + " ON awbn.original_ext_source_id = aw.designation"
+        + f"\nWHERE awbn.source_id IN ({id_str})"
+    )
+
+
+def _build_tmass_by_ids_unfiltered(ids: list[int]) -> str:
+    """2MASS join for explicit IDs, no angular-distance cut applied."""
+    select_clause = ",\n  ".join(_TMASS_COLUMNS)
+    id_str = ", ".join(str(sid) for sid in ids)
+    return (
+        "SELECT\n  "
+        + select_clause
+        + f"\nFROM {TMASS_XMATCH_TABLE} AS tmbn"
+        + f"\n  INNER JOIN {TMASS_PHOTO_TABLE} AS tm"
+        + " ON tmbn.original_ext_source_id = tm.designation"
+        + f"\nWHERE tmbn.source_id IN ({id_str})"
+    )
+
+
 def fetch_targets_by_source_id(
     source_ids: Iterable[int],
     cache_path: Path | None = None,
     *,
     use_cache: bool = True,
 ) -> SourceQueryResult:
-    """Fetch the Gaia + AllWISE + 2MASS join row for an explicit ID list."""
-    query = build_target_adql(source_ids)
-    query_hash = _hash_query(query)
+    """Fetch the Gaia + AllWISE + 2MASS join row for an explicit ID list.
+
+    Submitted as three small per-table queries (gaia_source, AllWISE
+    join, 2MASS join) and merged client-side. The 5-way JOIN form is
+    consistently failing on the Gaia archive during the DR4 transition.
+    Long ID lists are chunked into batches of ``_TARGET_QUERY_CHUNK_SIZE``
+    per query.
+
+    Uses LEFT joins via client-side pandas merge so rows missing
+    AllWISE or 2MASS data are still preserved (matches the
+    pre-v0.1.1 behavior of the single 5-way LEFT JOIN).
+    """
+    id_list = _validate_source_ids(source_ids)
+    if not id_list:
+        raise ValueError("source_ids must contain at least one ID")
+
+    full_query_text = build_target_adql(id_list)
+    query_hash = _hash_query(full_query_text)
 
     if cache_path is not None and use_cache:
         cached = _load_cached_result(cache_path, query_hash)
@@ -743,10 +803,40 @@ def fetch_targets_by_source_id(
             logger.info("loaded target cache (%d rows)", cached.n_sources)
             return cached
 
-    df = _execute_tap_query(query)
+    chunk_size = _TARGET_QUERY_CHUNK_SIZE
+    chunks = [id_list[i : i + chunk_size] for i in range(0, len(id_list), chunk_size)]
+    n_chunks = len(chunks)
+    logger.info(
+        "fetching %d targets via 3-step split (gaia + allwise + 2mass), %d chunks each",
+        len(id_list), n_chunks,
+    )
+
+    gaia_parts: list[pd.DataFrame] = []
+    allwise_parts: list[pd.DataFrame] = []
+    tmass_parts: list[pd.DataFrame] = []
+    for i, chunk_ids in enumerate(chunks, 1):
+        logger.info("gaia step chunk %d/%d (%d IDs)", i, n_chunks, len(chunk_ids))
+        gaia_parts.append(_execute_tap_query(_build_gaia_by_ids_adql(chunk_ids)))
+        logger.info("allwise step chunk %d/%d", i, n_chunks)
+        allwise_parts.append(_execute_tap_query(_build_allwise_by_ids_unfiltered(chunk_ids)))
+        logger.info("tmass step chunk %d/%d", i, n_chunks)
+        tmass_parts.append(_execute_tap_query(_build_tmass_by_ids_unfiltered(chunk_ids)))
+
+    gaia_df = pd.concat(gaia_parts, ignore_index=True) if gaia_parts else pd.DataFrame()
+    allwise_df = pd.concat(allwise_parts, ignore_index=True) if allwise_parts else pd.DataFrame()
+    tmass_df = pd.concat(tmass_parts, ignore_index=True) if tmass_parts else pd.DataFrame()
+
+    df = gaia_df.merge(allwise_df, on="gaia_dr3_source_id", how="left").merge(
+        tmass_df, on="gaia_dr3_source_id", how="left"
+    )
+    logger.info(
+        "merged: %d gaia × %d allwise × %d 2mass -> %d joined rows",
+        len(gaia_df), len(allwise_df), len(tmass_df), len(df),
+    )
+
     result = SourceQueryResult(
         sources=df,
-        query_text=query,
+        query_text=full_query_text,
         query_hash=query_hash,
         n_sources=len(df),
     )

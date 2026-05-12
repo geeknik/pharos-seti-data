@@ -1,0 +1,25 @@
+spec: "pre_registration/v0.1.1_calibrated_betas_and_xray_hot_dog.md \xA71"
+sub_populations:
+  hephaistos:
+    source: controls/hephaistos.yaml
+    kept_labels:
+    - A
+    - B
+    - G
+    n_kept: 3
+  marton_yso:
+    source: II/360/catalog
+    min_yso_prob: 0.8
+    n_from_catalog: 5000
+    n_xmatched_to_gaia: 4998
+  chen_debris:
+    source: J/ApJS/211/25
+    n_from_catalog: 571
+    n_xmatched_to_gaia: 438
+  million_quasars:
+    source: VII/290/catalog
+    skipped: true
+totals:
+  n_pre_coverage_filter: 5439
+  n_after_coverage_filter: 518
+  n_after_quiet_negative_exclusion: 495

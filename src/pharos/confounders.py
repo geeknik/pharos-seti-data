@@ -23,10 +23,14 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Pre-registered beta weights for the IR-layer confounder vector.
-# Source: pre_registration/v0.1_ir_benchmark.md §5.
+# β weights for the IR-layer confounder vector.
+#
+# Pre-registered initialization values, per pre_registration/v0.1_ir_benchmark.md §5.
+# When the v0.1.1 calibration artifact at controls/calibrated_betas_v0.1.1.yaml
+# is present, BETA_WEIGHTS is overridden with the calibrated values at
+# import time. Otherwise these v0.1 initialization weights are used.
 # ---------------------------------------------------------------------------
-BETA_WEIGHTS: dict[str, float] = {
+_PRE_REG_V0_1_BETA: dict[str, float] = {
     "blend": 2.0,
     "galaxy": 3.0,
     "qso": 3.0,
@@ -36,6 +40,42 @@ BETA_WEIGHTS: dict[str, float] = {
     "nss": 1.0,
     "wise_offset": 5.0,
 }
+
+BETA_WEIGHTS: dict[str, float] = dict(_PRE_REG_V0_1_BETA)
+
+
+def _try_load_calibrated_betas() -> None:
+    """If the v0.1.1 calibration artifact exists, override BETA_WEIGHTS.
+
+    Searches upwards from this file for ``controls/calibrated_betas_v0.1.1.yaml``.
+    Pure-Python import-time side effect; harmless when the file is absent.
+    """
+    import os
+    import yaml as _yaml
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):  # walk up to repo root
+        candidate = os.path.join(here, "controls", "calibrated_betas_v0.1.1.yaml")
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, encoding="utf-8") as f:
+                    payload = _yaml.safe_load(f)
+                calibrated = payload.get("calibrated_betas")
+                if isinstance(calibrated, dict):
+                    BETA_WEIGHTS.update(
+                        {k: float(v) for k, v in calibrated.items() if k in BETA_WEIGHTS}
+                    )
+                    logger.info(
+                        "loaded v0.1.1 calibrated β from %s; %d components updated",
+                        candidate, len(calibrated),
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("failed to load calibrated β from %s: %s", candidate, exc)
+            return
+        here = os.path.dirname(here)
+
+
+_try_load_calibrated_betas()
 
 # Distance scale for the P_blend angular term. Pre-registered.
 BLEND_ANGULAR_SCALE_ARCSEC: float = 1.5
@@ -110,15 +150,15 @@ def _component_low_galactic_lat(df: pd.DataFrame) -> pd.Series:
 def _component_hot_dog(df: pd.DataFrame) -> pd.Series:
     """Heuristic indicator for hot dust-obscured galaxy (HOT DOG) contamination.
 
-    True HOT DOG identification needs an X-ray null match (Suazo et al.
-    2024 §3.1 and the candidate G follow-up) — that requires an external
-    catalog crossmatch which is deferred to v0.1.1. The v0.1 heuristic
-    fires when:
-      - Gaia G magnitude is faint (>= HOT_DOG_FAINT_G_THRESHOLD)
-      - WISE W3 is bright (<= HOT_DOG_BRIGHT_W3_THRESHOLD)
-        OR WISE W4 is bright (<= HOT_DOG_BRIGHT_W4_THRESHOLD)
-      - Gaia DSC quasar probability is below 0.5 (a clear QSO match is
-        covered by P_qso instead)
+    v0.1.1 (pre_registration/v0.1.1_calibrated_betas_and_xray_hot_dog.md §2.3):
+
+      P_HOT_DOG = base_heuristic × (1 − X-ray_attenuation)
+
+    The base heuristic fires when faint-G + bright-W3/W4 + low-DSC-QSO.
+    The X-ray attenuation drops the probability to zero when the source
+    has an X-ray detection in any covered catalog. If no X-ray columns
+    are present in ``df`` (e.g., the quiet-negative population without
+    a cross-match), the v0.1 heuristic is used unchanged.
     """
     g = df.get("phot_g_mean_mag")
     w3 = df.get("w3mpro")
@@ -139,8 +179,18 @@ def _component_hot_dog(df: pd.DataFrame) -> pd.Series:
         if qso is not None
         else pd.Series(np.ones(len(df)), index=df.index)
     )
-    fired = faint_g * np.maximum(bright_w3, bright_w4) * not_qso
-    return fired.clip(lower=0.0, upper=1.0).fillna(0.0)
+    base = faint_g * np.maximum(bright_w3, bright_w4) * not_qso
+    base = base.clip(lower=0.0, upper=1.0).fillna(0.0)
+
+    xray_detected = df.get("xray_any_detection")
+    xray_coverage = df.get("xray_coverage_count")
+    if xray_detected is None or xray_coverage is None:
+        return base
+    # Attenuate to zero only when both detection and coverage are present.
+    attenuation = (
+        xray_detected.fillna(False).astype(bool) & (xray_coverage.fillna(0) > 0)
+    ).astype(float)
+    return (base * (1.0 - attenuation)).clip(lower=0.0, upper=1.0)
 
 
 def _component_bad_flag(df: pd.DataFrame) -> pd.Series:

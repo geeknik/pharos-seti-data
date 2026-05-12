@@ -1,0 +1,49 @@
+schema_version: 1
+spec: "pre_registration/v0.1.1_calibrated_betas_and_xray_hot_dog.md \xA73"
+calibrated_betas:
+  blend: 0.5978933177281651
+  galaxy: 0.0
+  qso: 1.042999883304027e-06
+  low_galactic_lat: 6.326833251527391
+  hot_dog: 0.8673799544759478
+  bad_flag: 3.139696750801509
+  nss: 2.054165427711705
+  wise_offset: 0.056393722747162416
+raw_pre_clip_betas:
+  blend: 0.5978933177281651
+  galaxy: -4.663603654374592e-07
+  qso: 1.042999883304027e-06
+  low_galactic_lat: 6.326833251527391
+  hot_dog: 0.8673799544759478
+  bad_flag: 3.139696750801509
+  nss: 2.054165427711705
+  wise_offset: 0.056393722747162416
+train_loss: 0.6605961108851476
+train_accuracy: 0.1680244399185336
+train_auc: 0.6997543777225539
+score_separation: 1.7161505739629401
+n_contaminants: 495
+n_controls: 2451
+fit_metadata:
+  python_version: 3.14.4
+  sklearn_version: 1.8.0
+  fit_params:
+    penalty: l2
+    C: 1.0
+    solver: lbfgs
+    max_iter: 1000
+    class_weight: balanced
+    fit_intercept: false
+    random_state: 0
+  n_components: 8
+  non_negative_clipping_changed_components: 1
+input_fixtures:
+  contaminants:
+    path: /Volumes/devbox/dev/pharos-seti-data/controls/contaminant_positive/contaminants.parquet
+    sha256: 0eb0ad01f610ccf0a00f3a81aeaf9d2a0a0a97b809f2b999f963adbd111b0706
+  controls:
+    path: /Volumes/devbox/dev/pharos-seti-data/controls/cache/quiet_negative.parquet
+    sha256: e893f39716200884325b9efb5a3923d5d217a7a9908cacd982078296ed78188d
+  pre_registration:
+    path: /Volumes/devbox/dev/pharos-seti-data/pre_registration/v0.1.1_calibrated_betas_and_xray_hot_dog.md
+    sha256: d9ad5d0fecbed29a77cbecc78a9bf238ef500dbc40fba342f4b52de5c9e95a89

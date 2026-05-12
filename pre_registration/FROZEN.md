@@ -12,11 +12,24 @@ The SHA-256 below is the hash of the document file at the byte level. Re-computi
 |---|---|
 | Document | [`v0.1_ir_benchmark.md`](v0.1_ir_benchmark.md) |
 | Date frozen | 2026-05-11 |
-| File size at freeze | 10,457 bytes |
-| SHA-256 at freeze | `0784859d8cad230d98a43c14e84862396855f590586dd72b29c7e2676963d38c` |
-| Capturing commit | Recorded by the same commit that creates this row. To verify, run `git log -1 --format='%H %ai' -- pre_registration/v0.1_ir_benchmark.md` from this repo. |
-| Status | FROZEN |
+| Status | FROZEN (with cosmetic corrigendum, see below) |
 | Superseded by | (none) |
+
+### Freeze record
+
+| Stage | Date | File size | SHA-256 |
+|---|---|---|---|
+| Initial freeze | 2026-05-11 | 10,457 bytes | `0784859d8cad230d98a43c14e84862396855f590586dd72b29c7e2676963d38c` |
+| Cosmetic corrigendum | 2026-05-12 | 10,494 bytes | `ff35549f2ebbb5befd48e07248918fc608992dae54529adc118371249afa0202` |
+
+### Corrigendum (2026-05-12)
+
+GitHub's GFM table renderer breaks on `|` characters inside table-cell code spans, even when those pipes are inside backticks. The §5 `P_lowgalb` row contained `|b|` (Galactic-latitude absolute value), which rendered as a broken table cell. **No scoring rule, threshold, β weight, or pass criterion was changed.** The expression was rewritten to use the equivalent `abs(b)` notation so the table renders correctly. The semantic meaning is identical:
+
+> Before: `1` if `|b| < 10°` else `max(0, (20 - |b|) / 10)`
+> After:  `1` if `abs(b) < 10°` else `max(0, (20 - abs(b)) / 10)`
+
+The git diff between the initial-freeze commit and the corrigendum commit is the byte-level proof that this is purely a typesetting fix. The integrity of the freeze rests on `git log -p -- pre_registration/v0.1_ir_benchmark.md`, which shows every change.
 
 ### Verification command
 
@@ -24,8 +37,8 @@ The SHA-256 below is the hash of the document file at the byte level. Re-computi
 shasum -a 256 pre_registration/v0.1_ir_benchmark.md
 ```
 
-Expected output:
+Expected output (current state):
 
 ```
-0784859d8cad230d98a43c14e84862396855f590586dd72b29c7e2676963d38c  pre_registration/v0.1_ir_benchmark.md
+ff35549f2ebbb5befd48e07248918fc608992dae54529adc118371249afa0202  pre_registration/v0.1_ir_benchmark.md
 ```

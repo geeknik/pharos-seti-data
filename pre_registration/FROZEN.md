@@ -42,3 +42,33 @@ Expected output (current state):
 ```
 ff35549f2ebbb5befd48e07248918fc608992dae54529adc118371249afa0202  pre_registration/v0.1_ir_benchmark.md
 ```
+
+---
+
+## v0.1.1 — Calibrated β + X-ray HOT DOG
+
+| Field | Value |
+|---|---|
+| Document | [`v0.1.1_calibrated_betas_and_xray_hot_dog.md`](v0.1.1_calibrated_betas_and_xray_hot_dog.md) |
+| Date frozen | 2026-05-12 |
+| Status | FROZEN |
+| Supersedes | v0.1 §5 (confounder vector) only |
+| Superseded by | (none) |
+
+### Freeze record
+
+| Stage | Date | File size | SHA-256 |
+|---|---|---|---|
+| Initial freeze | 2026-05-12 | 10,828 bytes | `d9ad5d0fecbed29a77cbecc78a9bf238ef500dbc40fba342f4b52de5c9e95a89` |
+
+### Verification command
+
+```sh
+shasum -a 256 pre_registration/v0.1.1_calibrated_betas_and_xray_hot_dog.md
+```
+
+Expected output:
+
+```
+d9ad5d0fecbed29a77cbecc78a9bf238ef500dbc40fba342f4b52de5c9e95a89  pre_registration/v0.1.1_calibrated_betas_and_xray_hot_dog.md
+```

@@ -1,5 +1,7 @@
 # Pharos
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20130607.svg)](https://doi.org/10.5281/zenodo.20130607) [![Latest release](https://img.shields.io/github/v/release/geeknik/pharos-seti-data?include_prereleases&label=release)](https://github.com/geeknik/pharos-seti-data/releases)
+
 **A cross-modal archival SETI ranking framework.**
 
 Pharos is a public, versioned instrument for ranking sky objects by calibrated, independent anomaly evidence across archival astronomical surveys. It is *not* a technosignature detector. It is a re-observation priority catalog: a system that converts archival anomalies into disciplined follow-up targets after known astrophysical and instrumental confounders are scored together.
@@ -39,7 +41,9 @@ Versioned data releases are published to Zenodo with DOIs. Each release ships th
 
 ## Citation
 
-A `CITATION.cff` file is provided at the repository root. Cite both the software release (via the Zenodo DOI for the relevant version) and the manuscript.
+Cite both the software release (via the Zenodo DOI for the relevant version) and the methodology manuscript. A `CITATION.cff` file is provided at the repository root for tool-readable metadata.
+
+**v0.1.0 release DOI:** [`10.5281/zenodo.20130607`](https://doi.org/10.5281/zenodo.20130607)
 
 ## License
 

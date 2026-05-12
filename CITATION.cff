@@ -25,3 +25,8 @@ keywords:
   - Breakthrough Listen
 version: 0.1.0
 date-released: 2026-05-11
+doi: 10.5281/zenodo.20130607
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.20130607
+    description: Zenodo DOI for the v0.1.0 software + data release

@@ -82,16 +82,23 @@ def _validate_columns(df: pd.DataFrame) -> None:
 
 
 def add_color_indices(df: pd.DataFrame) -> pd.DataFrame:
-    """Add W3-Ks and W4-Ks color indices and their propagated uncertainties.
+    """Add the Ks–W3 and Ks–W4 anomaly indices and their propagated errors.
+
+    These are stored under the legacy column names ``w3_ks`` and
+    ``w4_ks`` for compatibility with downstream code, but the *signed
+    convention* is (Ks magnitude) − (WISE magnitude). An IR excess
+    brightens W3/W4 (smaller magnitude) which raises this index, giving
+    a positive residual z-score against the locus — the natural sign
+    for an upper-tail empirical-p-value test.
 
     ``w4_ks`` is left as NaN where W4 is not detected (the W4 channel is
     optional in v0.1 — pre-reg §2 requires only W3 SNR >= 3).
     """
     _validate_columns(df)
     out = df.copy()
-    out["w3_ks"] = out["w3mpro"] - out["tmass_ks_m"]
+    out["w3_ks"] = out["tmass_ks_m"] - out["w3mpro"]
     out["w3_ks_err"] = np.sqrt(out["w3mpro_error"] ** 2 + out["tmass_ks_msigcom"] ** 2)
-    out["w4_ks"] = out["w4mpro"] - out["tmass_ks_m"]
+    out["w4_ks"] = out["tmass_ks_m"] - out["w4mpro"]
     out["w4_ks_err"] = np.sqrt(out["w4mpro_error"] ** 2 + out["tmass_ks_msigcom"] ** 2)
     return out
 

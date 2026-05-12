@@ -1,0 +1,4 @@
+q_threshold,n_total,n_rejections,rejection_rate,nominal_bound
+0.01,612,0,0.0,0.01
+0.05,612,0,0.0,0.05
+0.1,612,0,0.0,0.1

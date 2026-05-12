@@ -27,7 +27,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-from pharos import sources
+from pharos import fdr_report, injection, ir_sed, sources
 
 logger = logging.getLogger("pharos.cli")
 
@@ -83,6 +83,75 @@ def _extract_candidate_overrides(registry: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def cmd_run_injection_recovery(args: argparse.Namespace) -> int:
+    controls_path = Path(args.controls).resolve()
+    output_dir = Path(args.output_dir).resolve()
+    if not controls_path.exists():
+        logger.error("controls cache not found: %s", controls_path)
+        return 1
+
+    controls = pd.read_parquet(controls_path)
+    controls = ir_sed.add_stratification_bins(ir_sed.add_color_indices(controls))
+
+    result = injection.run_injection_recovery(
+        controls,
+        sigmas=tuple(float(s) for s in args.sigmas),
+        threshold=args.threshold,
+        max_pool_size=args.max_pool_size,
+        random_state=args.seed,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rows_path = output_dir / "injection_rows.parquet"
+    summary_path = output_dir / "injection_summary.csv"
+    result.rows.to_parquet(rows_path, index=False)
+    result.summary.to_csv(summary_path, index=False)
+    logger.info(
+        "injection recovery saved: rows=%s summary=%s "
+        "(locus_size=%d, pool_size=%d)",
+        rows_path,
+        summary_path,
+        result.locus_size,
+        result.injection_pool_size,
+    )
+    print(result.summary.to_string(index=False))
+    return 0
+
+
+def cmd_run_fdr_report(args: argparse.Namespace) -> int:
+    controls_path = Path(args.controls).resolve()
+    output_dir = Path(args.output_dir).resolve()
+    if not controls_path.exists():
+        logger.error("controls cache not found: %s", controls_path)
+        return 1
+
+    controls = pd.read_parquet(controls_path)
+    controls = ir_sed.add_stratification_bins(ir_sed.add_color_indices(controls))
+
+    result = fdr_report.run_fdr_report(
+        controls,
+        q_thresholds=tuple(float(q) for q in args.q_thresholds),
+        random_state=args.seed,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    rows_path = output_dir / "fdr_rows.parquet"
+    summary_path = output_dir / "fdr_summary.csv"
+    result.rows.to_parquet(rows_path, index=False)
+    result.summary.to_csv(summary_path, index=False)
+    logger.info(
+        "FDR report saved: rows=%s summary=%s "
+        "(locus=%d, target=%d, null=%d)",
+        rows_path,
+        summary_path,
+        result.locus_size,
+        result.target_size,
+        result.null_size,
+    )
+    print(result.summary.to_string(index=False))
+    return 0
+
+
 def cmd_fetch_hephaistos(args: argparse.Namespace) -> int:
     registry_path = Path(args.registry).resolve()
     output = Path(args.output).resolve()
@@ -133,6 +202,59 @@ def build_parser() -> argparse.ArgumentParser:
         "--force-refresh", action="store_true", help="Ignore any existing cache."
     )
     qn.set_defaults(func=cmd_fetch_quiet_negative)
+
+    inj = subparsers.add_parser(
+        "run_injection_recovery",
+        help="Run the v0.1 synthetic-injection recovery test.",
+    )
+    inj.add_argument(
+        "--controls",
+        default="controls/cache/quiet_negative.parquet",
+        help="Path to the cached quiet-negative population.",
+    )
+    inj.add_argument(
+        "--output-dir",
+        default="controls/synthetic_injection",
+        help="Directory to write injection_rows.parquet + injection_summary.csv.",
+    )
+    inj.add_argument(
+        "--sigmas",
+        nargs="+",
+        default=["5", "10", "20"],
+        help="σ levels to inject (default 5 10 20).",
+    )
+    inj.add_argument(
+        "--threshold",
+        type=float,
+        default=injection.DEFAULT_RECOVERY_THRESHOLD,
+        help="ir_evidence threshold counting as 'recovered'.",
+    )
+    inj.add_argument("--max-pool-size", type=int, default=200)
+    inj.add_argument("--seed", type=int, default=0)
+    inj.set_defaults(func=cmd_run_injection_recovery)
+
+    fdr = subparsers.add_parser(
+        "run_fdr_report",
+        help="Run BH FDR calibration on a held-out null sample.",
+    )
+    fdr.add_argument(
+        "--controls",
+        default="controls/cache/quiet_negative.parquet",
+        help="Path to the cached quiet-negative population.",
+    )
+    fdr.add_argument(
+        "--output-dir",
+        default="controls/fdr_report",
+        help="Directory to write fdr_rows.parquet + fdr_summary.csv.",
+    )
+    fdr.add_argument(
+        "--q-thresholds",
+        nargs="+",
+        default=["0.01", "0.05", "0.10"],
+        help="q-value cutoffs to report rejection counts at.",
+    )
+    fdr.add_argument("--seed", type=int, default=0)
+    fdr.set_defaults(func=cmd_run_fdr_report)
 
     hef = subparsers.add_parser(
         "fetch_hephaistos",

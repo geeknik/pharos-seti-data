@@ -25,12 +25,23 @@ node_modules/
 dist/
 .cache/
 
-# Local data caches — published artifacts go through Zenodo, not git
+# Local data caches by default — but the controls/ tree is part of the
+# v0.1+ release artifact set and is intentionally tracked. Personal
+# scratch areas under data/ remain ignored.
 data/
 *.parquet
 *.fits
 *.h5
 *.hdf5
+
+# Release artifacts that ARE tracked (override the rules above).
+!controls/cache/**
+!controls/synthetic_injection/**
+!controls/fdr_report/**
+!controls/calibration_positive/**
+!controls/contaminant_confirmed/**
+!controls/contaminant_suspected/**
+!controls/quiet_negative/**
 
 # Local environment
 .env

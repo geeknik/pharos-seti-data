@@ -1,6 +1,6 @@
 # Pharos
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20130607.svg)](https://doi.org/10.5281/zenodo.20130607) [![Latest release](https://img.shields.io/github/v/release/geeknik/pharos-seti-data?include_prereleases&label=release)](https://github.com/geeknik/pharos-seti-data/releases)
+[![DOI](https://zenodo.org/badge/1235096610.svg)](https://zenodo.org/badge/latestdoi/1235096610) [![Latest release](https://img.shields.io/github/v/release/geeknik/pharos-seti-data?include_prereleases&label=release)](https://github.com/geeknik/pharos-seti-data/releases)
 
 **A cross-modal archival SETI ranking framework.**
 

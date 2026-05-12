@@ -189,24 +189,32 @@ def _locus_value_with_fallback(
     """Look up locus value at bin_key; fall back to coarser bins if sparse.
 
     Returns (value, n_controls_used). NaN with 0 if no useful fallback.
+    The medians dataframe and the IQRs dataframe have disjoint column
+    names, so the column name picks the table.
     """
+    if column.endswith("_iqr"):
+        table = locus.iqrs
+    else:
+        table = locus.medians
+
     for level in range(len(bin_key), 0, -1):
         partial_key = bin_key[:level] + (slice(None),) * (len(bin_key) - level)
         try:
-            slice_df = locus.medians.loc[partial_key]
+            slice_df = table.loc[partial_key]
+            counts_slice = locus.counts.loc[partial_key]
         except KeyError:
             continue
         if isinstance(slice_df, pd.Series):
-            if pd.notna(slice_df.get(column)) and locus.counts.loc[partial_key] >= MIN_CONTROL_BIN_SIZE:
-                return float(slice_df[column]), int(locus.counts.loc[partial_key])
+            value = slice_df.get(column)
+            if pd.notna(value) and counts_slice >= MIN_CONTROL_BIN_SIZE:
+                return float(value), int(counts_slice)
         else:
-            counts_slice = locus.counts.loc[partial_key]
             valid = counts_slice[counts_slice >= MIN_CONTROL_BIN_SIZE]
             if len(valid) == 0:
                 continue
-            median = slice_df.loc[valid.index, column].median()
-            if pd.notna(median):
-                return float(median), int(valid.sum())
+            value = slice_df.loc[valid.index, column].median()
+            if pd.notna(value):
+                return float(value), int(valid.sum())
     return float("nan"), 0
 
 

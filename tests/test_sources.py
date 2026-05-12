@@ -56,35 +56,63 @@ class TestBuildTargetADQL:
             sources.build_target_adql([1 << 65])
 
 
-class TestBuildQuietNegativeADQL:
-    def test_query_includes_required_tables(self) -> None:
-        query = sources.build_quiet_negative_adql(limit=1000)
+class TestBuildQuietNegativeSplitQueries:
+    """The split-query path that's actually submitted to the Gaia archive."""
+
+    def test_gaia_step_includes_gaia_source(self) -> None:
+        query = sources.build_quiet_negative_gaia_adql(limit=1000)
         assert sources.GAIA_SOURCE_TABLE in query
+        assert sources.ALLWISE_XMATCH_TABLE not in query
+        assert sources.TMASS_XMATCH_TABLE not in query
+
+    def test_gaia_step_includes_pre_registered_cuts(self) -> None:
+        query = sources.build_quiet_negative_gaia_adql(limit=1000)
+        cov = sources.COVERAGE_CLASS_CUTS
+        qn = sources.QUIET_NEGATIVE_CUTS
+        assert f"parallax_over_error >= {cov['parallax_over_error_min']}" in query
+        assert f"phot_g_mean_mag <= {cov['g_mag_max']}" in query
+        assert f"ruwe < {qn['ruwe_max']}" in query
+        assert f"ABS(b) > {qn['galactic_latitude_min_deg']}" in query
+
+    def test_gaia_step_uses_indexed_distance_predicate(self) -> None:
+        # The computed-distance form (`1000.0 / parallax`) is dramatically
+        # slower server-side than the equivalent indexed parallax-bound.
+        query = sources.build_quiet_negative_gaia_adql(limit=1000)
+        assert "1000.0 / parallax" not in query
+        assert "parallax >= 5.000000" in query
+
+    def test_allwise_step_filters_by_ids(self) -> None:
+        ids = [3496509309189181184, 4843191593270342656]
+        query = sources.build_allwise_for_ids_adql(ids)
+        for sid in ids:
+            assert str(sid) in query
         assert sources.ALLWISE_XMATCH_TABLE in query
         assert sources.ALLWISE_PHOTO_TABLE in query
+
+    def test_tmass_step_filters_by_ids(self) -> None:
+        ids = [3496509309189181184]
+        query = sources.build_tmass_for_ids_adql(ids)
+        assert "3496509309189181184" in query
         assert sources.TMASS_XMATCH_TABLE in query
         assert sources.TMASS_PHOTO_TABLE in query
 
-    def test_query_includes_pre_registered_cuts(self) -> None:
-        query = sources.build_quiet_negative_adql(limit=1000)
-        cov = sources.COVERAGE_CLASS_CUTS
-        qn = sources.QUIET_NEGATIVE_CUTS
-        assert f"gs.parallax_over_error >= {cov['parallax_over_error_min']}" in query
-        assert f"gs.phot_g_mean_mag <= {cov['g_mag_max']}" in query
-        assert f"gs.ruwe < {qn['ruwe_max']}" in query
-        assert f"ABS(gs.b) > {qn['galactic_latitude_min_deg']}" in query
+    def test_allwise_step_validates_ids(self) -> None:
+        with pytest.raises(ValueError):
+            sources.build_allwise_for_ids_adql([])
+        with pytest.raises(TypeError):
+            sources.build_allwise_for_ids_adql(["12345"])  # type: ignore[list-item]
 
-    def test_limit_is_inlined(self) -> None:
-        query = sources.build_quiet_negative_adql(limit=2500)
+    def test_gaia_step_limit_is_inlined(self) -> None:
+        query = sources.build_quiet_negative_gaia_adql(limit=2500)
         assert "TOP 2500" in query
 
-    def test_unlimited_query_omits_top(self) -> None:
-        query = sources.build_quiet_negative_adql(limit=None)
+    def test_gaia_step_unlimited_omits_top(self) -> None:
+        query = sources.build_quiet_negative_gaia_adql(limit=None)
         assert "TOP" not in query
 
-    def test_query_hash_is_stable(self) -> None:
-        q1 = sources.build_quiet_negative_adql(limit=1000)
-        q2 = sources.build_quiet_negative_adql(limit=1000)
+    def test_gaia_step_hash_is_stable(self) -> None:
+        q1 = sources.build_quiet_negative_gaia_adql(limit=1000)
+        q2 = sources.build_quiet_negative_gaia_adql(limit=1000)
         assert q1 == q2
         assert hashlib.sha256(q1.encode("utf-8")).hexdigest() == hashlib.sha256(
             q2.encode("utf-8")

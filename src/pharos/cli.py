@@ -120,7 +120,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     qn.add_argument("--output", required=True, help="Path to write the parquet cache.")
     qn.add_argument(
-        "--limit", type=int, default=100_000, help="Maximum rows to fetch (default 100000)."
+        "--limit",
+        type=int,
+        default=5_000,
+        help=(
+            "Maximum rows to fetch (default 5000 — sufficient for the v0.1 "
+            "stratification, which needs ~30 controls per bin across ~100 bins. "
+            "Raise to 50000+ for v1.0 production releases."
+        ),
     )
     qn.add_argument(
         "--force-refresh", action="store_true", help="Ignore any existing cache."

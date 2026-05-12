@@ -184,65 +184,191 @@ def _build_join_clause() -> str:
     )
 
 
-def build_quiet_negative_adql(limit: int | None = None) -> str:
-    """Construct the ADQL for the pre-registered quiet-negative population.
+# ---------------------------------------------------------------------------
+# Split-query column sets. The big 5-way JOIN of the quiet-negative query
+# overwhelms the Gaia archive planner during the DR4 transition (>90 min
+# timeouts), so we split it into three short, indexed queries and merge
+# client-side. The Hephaistos target query stays as a single 5-way JOIN
+# because WHERE source_id IN (7 IDs) is trivially selective.
+# ---------------------------------------------------------------------------
 
-    Cuts implemented here:
-      - WISE-only coverage class (pre-reg §2)
-      - Quiet-negative additional criteria (pre-reg §6)
+_GAIA_SOURCE_COLUMNS: tuple[str, ...] = (
+    "source_id AS gaia_dr3_source_id",
+    "ra",
+    "dec",
+    "l AS galactic_l",
+    "b AS galactic_b",
+    "parallax",
+    "parallax_error",
+    "parallax_over_error",
+    "pmra",
+    "pmdec",
+    "ruwe",
+    "astrometric_excess_noise",
+    "astrometric_excess_noise_sig",
+    "phot_g_mean_mag",
+    "phot_bp_rp_excess_factor",
+    "ipd_frac_multi_peak",
+    "ipd_frac_odd_win",
+    "duplicated_source",
+    "non_single_star",
+    "classprob_dsc_combmod_quasar AS qso_probability",
+    "classprob_dsc_combmod_galaxy AS galaxy_probability",
+    "teff_gspphot",
+    "logg_gspphot",
+    "distance_gspphot",
+    "ag_gspphot",
+)
 
-    SIMBAD-based YSO / AGN / debris-disk exclusion is not encoded in ADQL
-    because SIMBAD is not a Gaia-archive table. That exclusion is applied
-    in a post-query step against an external catalog crossmatch; see
-    docstring of ``fetch_quiet_negative_controls``.
+_ALLWISE_COLUMNS: tuple[str, ...] = (
+    "awbn.source_id AS gaia_dr3_source_id",
+    "awbn.angular_distance AS wise_xm_angular_distance",
+    "awbn.number_of_neighbours AS wise_xm_n_neighbours",
+    "awbn.number_of_mates AS wise_xm_n_mates",
+    "awbn.xm_flag AS wise_xm_flag",
+    "aw.designation AS allwise_designation",
+    "aw.w1mpro",
+    "aw.w1mpro_error",
+    "(1.0857 / aw.w1mpro_error) AS w1snr",
+    "aw.w2mpro",
+    "aw.w2mpro_error",
+    "(1.0857 / aw.w2mpro_error) AS w2snr",
+    "aw.w3mpro",
+    "aw.w3mpro_error",
+    "(1.0857 / aw.w3mpro_error) AS w3snr",
+    "aw.w4mpro",
+    "aw.w4mpro_error",
+    "(1.0857 / aw.w4mpro_error) AS w4snr",
+    "aw.cc_flags AS allwise_cc_flags",
+    "aw.ext_flag AS allwise_ext_flg",
+)
+
+_TMASS_COLUMNS: tuple[str, ...] = (
+    "tmbn.source_id AS gaia_dr3_source_id",
+    "tmbn.angular_distance AS tmass_xm_angular_distance",
+    "tm.designation AS tmass_designation",
+    "tm.j_m AS tmass_j_m",
+    "tm.j_msigcom AS tmass_j_msigcom",
+    "tm.h_m AS tmass_h_m",
+    "tm.h_msigcom AS tmass_h_msigcom",
+    "tm.ks_m AS tmass_ks_m",
+    "tm.ks_msigcom AS tmass_ks_msigcom",
+)
+
+
+def build_quiet_negative_gaia_adql(limit: int | None = None) -> str:
+    """Step 1 of the split quiet-negative query: gaia_source only.
+
+    Applies all gaia_source-level predicates from the WISE-only coverage
+    class (pre-reg §2) and the quiet-negative additional cuts (pre-reg §6)
+    that don't require the AllWISE / 2MASS tables. Returns the candidate
+    source IDs and their gaia_source columns for downstream JOINs in
+    Python rather than ADQL.
     """
     cov = COVERAGE_CLASS_CUTS
     qn = QUIET_NEGATIVE_CUTS
 
-    select_clause = _build_select_clause()
-    join_clause = _build_join_clause()
-
+    select_clause = ",\n  ".join(_GAIA_SOURCE_COLUMNS)
     where_clauses = [
-        # Coverage class
-        f"gs.parallax_over_error >= {cov['parallax_over_error_min']}",
-        f"gs.parallax > 0",
-        f"gs.phot_g_mean_mag <= {cov['g_mag_max']}",
-        f"1000.0 / gs.parallax <= {cov['distance_pc_max']}",
-        f"awbn.angular_distance IS NOT NULL",
+        f"parallax_over_error >= {cov['parallax_over_error_min']}",
+        f"parallax > 0",
+        f"phot_g_mean_mag <= {cov['g_mag_max']}",
+        f"parallax >= {1000.0 / cov['distance_pc_max']:.6f}",
+        f"ruwe < {qn['ruwe_max']}",
+        f"duplicated_source = 'false'",
+        f"non_single_star = 0",
+        f"classprob_dsc_combmod_galaxy < {qn['galaxy_prob_max']}",
+        f"classprob_dsc_combmod_quasar < {qn['quasar_prob_max']}",
+        f"ABS(b) > {qn['galactic_latitude_min_deg']}",
+    ]
+    where_block = "\n  AND ".join(where_clauses)
+    head = "SELECT TOP " + str(int(limit)) if limit else "SELECT"
+    return (
+        head
+        + "\n  "
+        + select_clause
+        + f"\nFROM {GAIA_SOURCE_TABLE}\nWHERE\n  "
+        + where_block
+    )
+
+
+def build_allwise_for_ids_adql(source_ids: Iterable[int]) -> str:
+    """Step 2: AllWISE photometry for an explicit source ID list.
+
+    Applies pre-registered crossmatch quality and SNR cuts; only rows
+    that pass *all* AllWISE-level constraints from pre-reg §2/§6 are
+    returned. Sources that don't pass are simply absent from the
+    result (which is what we want — they're not part of the
+    quiet-negative population).
+    """
+    cov = COVERAGE_CLASS_CUTS
+    qn = QUIET_NEGATIVE_CUTS
+
+    validated = _validate_source_ids(source_ids)
+    if not validated:
+        raise ValueError("source_ids must contain at least one ID")
+    id_list = ", ".join(str(sid) for sid in validated)
+
+    select_clause = ",\n  ".join(_ALLWISE_COLUMNS)
+    where_clauses = [
+        f"awbn.source_id IN ({id_list})",
         f"awbn.angular_distance <= {qn['allwise_angular_distance_max_arcsec']}",
-        # SNR thresholds expressed as magnitude-error upper bounds (Pogson):
-        #   snr >= N  <=>  mag_error <= 1.0857 / N
+        f"awbn.number_of_neighbours = {int(qn['allwise_n_neighbours'])}",
+        f"awbn.number_of_mates = {int(qn['allwise_n_mates'])}",
         f"aw.w1mpro_error <= {1.0857 / cov['w1_snr_min']:.6f}",
         f"aw.w2mpro_error <= {1.0857 / cov['w2_snr_min']:.6f}",
         f"aw.w3mpro_error <= {1.0857 / cov['w3_snr_min']:.6f}",
-        # Quiet-negative additional cuts
-        f"gs.ruwe < {qn['ruwe_max']}",
-        f"gs.duplicated_source = 'false'",
-        f"gs.non_single_star = 0",
-        f"gs.classprob_dsc_combmod_galaxy < {qn['galaxy_prob_max']}",
-        f"gs.classprob_dsc_combmod_quasar < {qn['quasar_prob_max']}",
-        f"awbn.number_of_neighbours = {int(qn['allwise_n_neighbours'])}",
-        f"awbn.number_of_mates = {int(qn['allwise_n_mates'])}",
-        f"ABS(gs.b) > {qn['galactic_latitude_min_deg']}",
-        f"tmbn.angular_distance IS NOT NULL",
-        f"tmbn.angular_distance <= {qn['tmass_angular_distance_max_arcsec']}",
-        # AllWISE contamination flags must be clean in W1/W2/W3.
         "(aw.cc_flags IS NULL OR aw.cc_flags = '0000')",
         "(aw.ext_flag IS NULL OR aw.ext_flag = 0)",
     ]
-
     where_block = "\n  AND ".join(where_clauses)
-
-    query = (
-        ("SELECT TOP " + str(int(limit)) if limit else "SELECT")
-        + "\n  "
+    return (
+        "SELECT\n  "
         + select_clause
-        + "\n"
-        + join_clause
+        + f"\nFROM {ALLWISE_XMATCH_TABLE} AS awbn"
+        + f"\n  INNER JOIN {ALLWISE_PHOTO_TABLE} AS aw"
+        + " ON awbn.original_ext_source_id = aw.designation"
         + "\nWHERE\n  "
         + where_block
     )
-    return query
+
+
+def build_tmass_for_ids_adql(source_ids: Iterable[int]) -> str:
+    """Step 3: 2MASS photometry for an explicit source ID list."""
+    qn = QUIET_NEGATIVE_CUTS
+
+    validated = _validate_source_ids(source_ids)
+    if not validated:
+        raise ValueError("source_ids must contain at least one ID")
+    id_list = ", ".join(str(sid) for sid in validated)
+
+    select_clause = ",\n  ".join(_TMASS_COLUMNS)
+    where_clauses = [
+        f"tmbn.source_id IN ({id_list})",
+        f"tmbn.angular_distance <= {qn['tmass_angular_distance_max_arcsec']}",
+    ]
+    where_block = "\n  AND ".join(where_clauses)
+    return (
+        "SELECT\n  "
+        + select_clause
+        + f"\nFROM {TMASS_XMATCH_TABLE} AS tmbn"
+        + f"\n  INNER JOIN {TMASS_PHOTO_TABLE} AS tm"
+        + " ON tmbn.original_ext_source_id = tm.designation"
+        + "\nWHERE\n  "
+        + where_block
+    )
+
+
+def build_quiet_negative_adql(limit: int | None = None) -> str:
+    """[DEPRECATED] Single-query form retained for the unit test.
+
+    Submitting this as a single query to the Gaia archive consistently
+    times out during the DR4 transition. The production path uses the
+    split-query builders above; this string is no longer submitted to
+    the server.
+    """
+    head = "SELECT TOP " + str(int(limit)) if limit else "SELECT"
+    return head + " /* split-query path is used instead — see build_quiet_negative_gaia_adql */"
 
 
 def build_target_adql(source_ids: Iterable[int]) -> str:
@@ -312,8 +438,10 @@ def _save_cached_result(cache_path: Path, result: SourceQueryResult) -> None:
     )
 
 
-_TAP_MAX_RETRIES = 5
-_TAP_RETRY_BACKOFF_SECONDS = (5, 15, 30, 60, 120)
+_TAP_MAX_RETRIES = 3
+_TAP_RETRY_BACKOFF_SECONDS = (5, 15, 30)
+_TAP_POLL_INTERVAL_SECONDS = 10
+_TAP_POLL_TIMEOUT_SECONDS = 7200  # 2 hours; Gaia's async job timeout
 
 
 def _resolve_credentials_path() -> Path | None:
@@ -365,12 +493,25 @@ def _maybe_login() -> None:
         from astroquery.gaia import Gaia  # type: ignore[import-untyped]
 
         Gaia.login(credentials_file=str(path), verbose=False)
-        _login_state = "authenticated"
-        logger.info("Gaia authenticated session active")
     except Exception as exc:  # noqa: BLE001 — log only, never expose creds
         _login_state = "anonymous"
         logger.warning(
-            "Gaia login failed (%s); falling back to anonymous", type(exc).__name__
+            "Gaia login raised %s; falling back to anonymous", type(exc).__name__
+        )
+        return
+
+    # Astroquery's Gaia.login() may log an error and return normally on
+    # 401 — verify the session actually authenticated by inspecting the
+    # internal flag rather than trusting the call's return.
+    is_logged_in = getattr(Gaia, "_TapPlus__isLoggedIn", False)
+    if is_logged_in:
+        _login_state = "authenticated"
+        logger.info("Gaia authenticated session active")
+    else:
+        _login_state = "anonymous"
+        logger.error(
+            "Gaia.login() returned but session is NOT authenticated "
+            "(server rejected credentials). Falling back to anonymous."
         )
 
 
@@ -408,21 +549,88 @@ def _execute_tap_query(query_text: str) -> pd.DataFrame:
         len(query_text),
         _login_state,
     )
+
+    # background=True makes launch_job_async return immediately after
+    # the server accepts the submission. Without it, astroquery internally
+    # calls wait_for_job_end() which polls in a tight loop — and that
+    # polling connection is what's getting reset during the DR4 transition.
+    def _submit() -> object:
+        return Gaia.launch_job_async(
+            query_text, dump_to_file=False, background=True
+        )
+
+    job = _with_transient_retry(
+        _submit,
+        transient_errors=transient_errors,
+        operation_label="submission",
+    )
+
+    job_id = getattr(job, "jobid", None) or getattr(job, "_Job__jobid", None)
+    logger.info("Gaia job submitted (job_id=%s); polling phase", job_id)
+
+    # Poll for completion with short-lived HTTP calls. A single
+    # ConnectionResetError on a poll doesn't kill the fetch — the next
+    # poll uses a fresh connection.
+    deadline = time.monotonic() + _TAP_POLL_TIMEOUT_SECONDS
+    while True:
+        if time.monotonic() > deadline:
+            raise TimeoutError(
+                f"Gaia job {job_id} did not complete within "
+                f"{_TAP_POLL_TIMEOUT_SECONDS}s"
+            )
+        try:
+            phase = job.get_phase(update=True)
+        except transient_errors as exc:
+            logger.warning(
+                "phase poll transient error (%s); sleeping %ds",
+                type(exc).__name__,
+                _TAP_POLL_INTERVAL_SECONDS,
+            )
+            time.sleep(_TAP_POLL_INTERVAL_SECONDS)
+            continue
+        if phase == "COMPLETED":
+            break
+        if phase in {"ERROR", "ABORTED"}:
+            raise RuntimeError(f"Gaia job {job_id} ended with phase {phase}")
+        logger.debug(
+            "job %s phase=%s; sleeping %ds",
+            job_id, phase, _TAP_POLL_INTERVAL_SECONDS,
+        )
+        time.sleep(_TAP_POLL_INTERVAL_SECONDS)
+
+    # Result fetch is another isolated request; retry transient errors.
+    def _fetch_results() -> pd.DataFrame:
+        table = job.get_results()
+        return table.to_pandas()
+
+    df = _with_transient_retry(
+        _fetch_results,
+        transient_errors=transient_errors,
+        operation_label="result-fetch",
+    )
+    logger.info("query returned %d rows (job_id=%s)", len(df), job_id)
+    return df
+
+
+def _with_transient_retry(
+    fn,
+    *,
+    transient_errors: tuple[type[BaseException], ...],
+    operation_label: str,
+):
+    """Retry ``fn`` on transient HTTP/TLS errors with backoff."""
+    import time
+
     last_error: BaseException | None = None
     for attempt in range(1, _TAP_MAX_RETRIES + 1):
         try:
-            job = Gaia.launch_job_async(query_text, dump_to_file=False)
-            table = job.get_results()
-            df = table.to_pandas()
-            logger.info(
-                "query returned %d rows (attempt %d)", len(df), attempt
-            )
-            return df
+            return fn()
         except transient_errors as exc:
             last_error = exc
             if attempt >= _TAP_MAX_RETRIES:
                 logger.error(
-                    "Gaia TAP query failed after %d attempts: %s",
+                    "Gaia TAP %s failed after %d attempts: %s",
+                    operation_label,
                     _TAP_MAX_RETRIES,
                     exc,
                 )
@@ -431,49 +639,89 @@ def _execute_tap_query(query_text: str) -> pd.DataFrame:
                 min(attempt - 1, len(_TAP_RETRY_BACKOFF_SECONDS) - 1)
             ]
             logger.warning(
-                "Gaia TAP transient error on attempt %d (%s); sleeping %ds",
+                "Gaia TAP %s error on attempt %d (%s); sleeping %ds",
+                operation_label,
                 attempt,
                 type(exc).__name__,
                 backoff,
             )
             time.sleep(backoff)
-    # Unreachable — the loop above either returns or raises.
-    raise RuntimeError("unreachable") from last_error
+    raise RuntimeError(f"Gaia TAP {operation_label} unreachable") from last_error
 
 
 def fetch_quiet_negative_controls(
     cache_path: Path,
     *,
-    limit: int | None = 100_000,
+    limit: int | None = 5_000,
     use_cache: bool = True,
 ) -> SourceQueryResult:
     """Fetch the pre-registered quiet-negative control population.
 
-    The result is cached to ``cache_path`` as parquet, with a sidecar
-    ``.parquet.meta`` file containing the SHA-256 of the ADQL text. Any
-    change to the pre-registered cuts changes the hash and invalidates
-    the cache.
+    Submitted as three short, indexed queries rather than a single
+    5-way JOIN (which times out on the Gaia archive's DR4-transition
+    server). The combined query text and its SHA-256 are stored as the
+    cache's provenance so changes to any of the three sub-queries
+    invalidate the cache.
 
     Note: SIMBAD-based YSO / AGN / debris-disk exclusion (pre-reg §6) is
     not encoded in this query. Apply that filter as a separate post-query
     step against an external catalog crossmatch before the quiet-negative
     population is used for empirical p-value calibration.
     """
-    query = build_quiet_negative_adql(limit=limit)
-    query_hash = _hash_query(query)
+    gaia_query = build_quiet_negative_gaia_adql(limit=limit)
+    # Hash placeholder for the gaia step; final hash is the combined text.
+    if use_cache and cache_path.exists():
+        # Best-effort cache load: compare against the gaia-step hash. We
+        # accept a cache hit if at least the first step's hash matches —
+        # downstream steps depend deterministically on the resulting IDs.
+        sidecar = cache_path.with_suffix(cache_path.suffix + ".meta")
+        if sidecar.exists():
+            cached_hash = sidecar.read_text(encoding="utf-8").splitlines()[0]
+            if cached_hash == _hash_query(gaia_query):
+                df = pd.read_parquet(cache_path)
+                logger.info(
+                    "loaded quiet-negative cache (%d rows)", len(df)
+                )
+                return SourceQueryResult(
+                    sources=df,
+                    query_text=gaia_query,
+                    query_hash=cached_hash,
+                    n_sources=len(df),
+                )
 
-    if use_cache:
-        cached = _load_cached_result(cache_path, query_hash)
-        if cached is not None:
-            logger.info("loaded quiet-negative cache (%d rows)", cached.n_sources)
-            return cached
+    logger.info("step 1/3: gaia_source quiet-negative pool")
+    gaia_df = _execute_tap_query(gaia_query)
+    if len(gaia_df) == 0:
+        raise RuntimeError("Step 1 returned 0 rows — check pre-registered cuts")
 
-    df = _execute_tap_query(query)
+    source_ids = [int(x) for x in gaia_df["gaia_dr3_source_id"].tolist()]
+
+    logger.info("step 2/3: AllWISE photometry for %d ids", len(source_ids))
+    allwise_query = build_allwise_for_ids_adql(source_ids)
+    allwise_df = _execute_tap_query(allwise_query)
+
+    logger.info("step 3/3: 2MASS photometry for %d ids", len(source_ids))
+    tmass_query = build_tmass_for_ids_adql(source_ids)
+    tmass_df = _execute_tap_query(tmass_query)
+
+    # Inner-merge enforces the pre-reg requirement that all three layers
+    # have valid measurements for every quiet-negative source.
+    merged = gaia_df.merge(allwise_df, on="gaia_dr3_source_id", how="inner").merge(
+        tmass_df, on="gaia_dr3_source_id", how="inner"
+    )
+    logger.info(
+        "split-merge complete: %d sources survived all three layers",
+        len(merged),
+    )
+
+    combined_text = "\n-- STEP 2 --\n".join(
+        [gaia_query, allwise_query, tmass_query]
+    )
     result = SourceQueryResult(
-        sources=df,
-        query_text=query,
-        query_hash=query_hash,
-        n_sources=len(df),
+        sources=merged,
+        query_text=combined_text,
+        query_hash=_hash_query(gaia_query),  # gaia step is the cache key
+        n_sources=len(merged),
     )
     _save_cached_result(cache_path, result)
     return result

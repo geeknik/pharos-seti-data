@@ -1,6 +1,6 @@
-"""Command-line entry points for Pharos data fetches.
+"""Command-line entry points for Pharos data and benchmark workflows.
 
-Two subcommands are provided:
+The primary source-fetch subcommands are:
 
     python -m pharos.cli fetch_quiet_negative \\
         --output controls/cache/quiet_negative.parquet \\
@@ -10,11 +10,13 @@ Two subcommands are provided:
         --registry controls/hephaistos.yaml \\
         --output controls/cache/hephaistos_join.parquet
 
-Both submit pre-registered ADQL to the Gaia archive (gea.esac.esa.int)
+Both submit registered ADQL to the Gaia archive (gea.esac.esa.int)
 and cache the results to parquet. The ``fetch_hephaistos`` command also
 merges in W1↔W3 photocentre offsets and other per-candidate fields from
 ``controls/hephaistos.yaml`` (Suazo et al. 2024 Table 5 / Table 7), so
-the resulting parquet has every column the v0.1 scoring pipeline needs.
+the resulting parquet has the source columns used by the v0.1 pilot.
+Other subcommands reproduce benchmark, injection, and failed v0.1.1
+diagnostic workflows; they are labeled accordingly in CLI help.
 """
 
 from __future__ import annotations
@@ -53,6 +55,10 @@ def _configure_logging(verbosity: int) -> None:
 
 def cmd_fetch_quiet_negative(args: argparse.Namespace) -> int:
     output = Path(args.output).resolve()
+    logger.warning(
+        "fetch_quiet_negative produces a raw candidate pool; the registered "
+        "BP/RP and external-catalog exclusions must run before calibration"
+    )
     logger.info("fetching quiet-negative controls -> %s (limit=%s)", output, args.limit)
     result = sources.fetch_quiet_negative_controls(
         cache_path=output, limit=args.limit, use_cache=not args.force_refresh
@@ -107,8 +113,7 @@ def cmd_run_injection_recovery(args: argparse.Namespace) -> int:
     result.rows.to_parquet(rows_path, index=False)
     result.summary.to_csv(summary_path, index=False)
     logger.info(
-        "injection recovery saved: rows=%s summary=%s "
-        "(locus_size=%d, pool_size=%d)",
+        "injection recovery saved: rows=%s summary=%s (locus_size=%d, pool_size=%d)",
         rows_path,
         summary_path,
         result.locus_size,
@@ -147,9 +152,7 @@ def cmd_run_calibration(args: argparse.Namespace) -> int:
         controls_df = controls_df.merge(xray_summary, on="gaia_dr3_source_id", how="left")
         logger.info("merged X-ray summary onto contaminants and controls")
 
-    result = calibration.calibrate_betas(
-        contam_df, controls_df, random_state=args.seed
-    )
+    result = calibration.calibrate_betas(contam_df, controls_df, random_state=args.seed)
     calibration.write_calibration_yaml(
         result,
         output_path=output_path,
@@ -157,7 +160,9 @@ def cmd_run_calibration(args: argparse.Namespace) -> int:
         controls_path=controls_path,
         pre_reg_path=pre_reg_path,
     )
-    print(f"Calibrated β (train_loss={result.train_loss:.4f}, accuracy={result.train_accuracy:.3f}):")
+    print(
+        f"Calibrated β (train_loss={result.train_loss:.4f}, accuracy={result.train_accuracy:.3f}):"
+    )
     for name, val in result.betas.items():
         marker = "" if val > 0 else "  [clipped to 0]"
         print(f"  {name:18s} {val:7.3f}{marker}")
@@ -237,8 +242,7 @@ def cmd_run_fdr_report(args: argparse.Namespace) -> int:
     result.rows.to_parquet(rows_path, index=False)
     result.summary.to_csv(summary_path, index=False)
     logger.info(
-        "FDR report saved: rows=%s summary=%s "
-        "(locus=%d, target=%d, null=%d)",
+        "FDR report saved: rows=%s summary=%s (locus=%d, target=%d, null=%d)",
         rows_path,
         summary_path,
         result.locus_size,
@@ -260,9 +264,7 @@ def cmd_fetch_hephaistos(args: argparse.Namespace) -> int:
         return 1
 
     logger.info("fetching Gaia + AllWISE + 2MASS join for %d candidates", len(source_ids))
-    result = sources.fetch_targets_by_source_id(
-        source_ids, cache_path=None, use_cache=False
-    )
+    result = sources.fetch_targets_by_source_id(source_ids, cache_path=None, use_cache=False)
     if result.n_sources == 0:
         logger.error(
             "Gaia returned 0 rows for the registered candidates; check IDs and table names"
@@ -277,7 +279,9 @@ def cmd_fetch_hephaistos(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="pharos", description="Pharos v0.1 data fetches.")
+    parser = argparse.ArgumentParser(
+        prog="pharos", description="Pharos data fetches and historical benchmark tools."
+    )
     parser.add_argument("-v", "--verbose", action="count", default=0)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -288,16 +292,13 @@ def build_parser() -> argparse.ArgumentParser:
     qn.add_argument(
         "--limit",
         type=int,
-        default=5_000,
+        default=50_000,
         help=(
-            "Maximum rows to fetch (default 5000 — sufficient for the v0.1 "
-            "stratification, which needs ~30 controls per bin across ~100 bins. "
-            "Raise to 50000+ for v1.0 production releases."
+            "Maximum raw candidate rows to fetch (default 50000, the frozen "
+            "v0.1 minimum before required post-query exclusions)."
         ),
     )
-    qn.add_argument(
-        "--force-refresh", action="store_true", help="Ignore any existing cache."
-    )
+    qn.add_argument("--force-refresh", action="store_true", help="Ignore any existing cache.")
     qn.set_defaults(func=cmd_fetch_quiet_negative)
 
     inj = subparsers.add_parser(
@@ -355,7 +356,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     xr = subparsers.add_parser(
         "fetch_xray",
-        help="X-ray cross-match input positions against 2RXS/XMM/eROSITA/Chandra.",
+        help=(
+            "Reproduce experimental v0.1.1 X-ray match diagnostics; output is "
+            "not valid for null/coverage scoring."
+        ),
     )
     xr.add_argument(
         "--input",
@@ -377,7 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     con = subparsers.add_parser(
         "fetch_contaminants",
-        help="Build the v0.1.1 contaminant_positive control set.",
+        help="Reproduce the failed v0.1.1 contaminant-positive control set.",
     )
     con.add_argument("--hephaistos-yaml", default="controls/hephaistos.yaml")
     con.add_argument("--hephaistos-join", default="controls/cache/hephaistos_join.parquet")
@@ -392,7 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     cal = subparsers.add_parser(
         "run_calibration",
-        help="Fit non-negative L2 logistic regression β on contaminants vs quiet-negative.",
+        help="Reproduce the failed v0.1.1 global β calibration; never activates it.",
     )
     cal.add_argument(
         "--contaminants",
@@ -411,8 +415,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cal.add_argument(
         "--output",
-        default="controls/calibrated_betas_v0.1.1.yaml",
-        help="Where to write the calibration artifact.",
+        default="pre_registration/failed_attempts/v0.1.1_reproduction_betas.yaml",
+        help="Where to write the non-active historical calibration artifact.",
     )
     cal.add_argument(
         "--pre-registration",

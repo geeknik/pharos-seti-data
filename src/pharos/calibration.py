@@ -1,4 +1,4 @@
-"""β-weight calibration for Pharos v0.1.1.
+"""Reproduction code for the failed Pharos v0.1.1 β calibration.
 
 Pre-registration v0.1.1 §3 fixes the procedure: a non-negative L2
 logistic regression over the eight P_IR components, fit on a binary
@@ -8,10 +8,14 @@ Non-negativity is enforced via post-clip — coefficients that come back
 negative after the L2 fit are clipped to zero and the final β is the
 clipped vector.
 
+The registered v0.1.1 attempt failed and did not ship. Output from this
+module is historical/reproduction evidence and must never be activated
+by the runtime. v0.1.2 pre-registers a different subtype-aware model.
+
 Output: a `calibrated_betas_v0.1.1.yaml` artifact recording the
 calibrated weights, the input-fixture SHA-256s, the sklearn version,
-and the random seed. Confounders module loads this YAML at runtime if
-present and falls back to the pre-registered v0.1 β otherwise.
+and the random seed. The active scoring runtime deliberately ignores
+this artifact; it belongs only under ``pre_registration/failed_attempts``.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pharos import confounders, ir_sed
+from pharos import confounders
 
 logger = logging.getLogger(__name__)
 
@@ -58,9 +62,7 @@ class CalibrationResult:
     fit_metadata: dict
 
 
-def _confounder_feature_matrix(
-    df: pd.DataFrame, component_order: list[str]
-) -> np.ndarray:
+def _confounder_feature_matrix(df: pd.DataFrame, component_order: list[str]) -> np.ndarray:
     """Compute the P_IR component vector for each row of df.
 
     Returns an array of shape (n_rows, n_components) where columns are
@@ -113,12 +115,13 @@ def calibrate_betas(
     n_neg = len(X_neg)
     if n_pos < 3 or n_neg < 30:
         raise ValueError(
-            f"calibration needs at least 3 contaminants and 30 controls; "
-            f"got {n_pos} and {n_neg}"
+            f"calibration needs at least 3 contaminants and 30 controls; got {n_pos} and {n_neg}"
         )
     logger.info(
         "fitting non-negative L2 logistic regression: %d contaminants, %d controls, %d features",
-        n_pos, n_neg, X.shape[1],
+        n_pos,
+        n_neg,
+        X.shape[1],
     )
 
     model = LogisticRegression(
@@ -175,7 +178,9 @@ def calibrate_betas(
 
     logger.info(
         "calibration: AUC=%.3f, loss=%.4f, score_sep=%.3f, %d/%d non-zero β",
-        train_auc, train_loss, score_separation,
+        train_auc,
+        train_loss,
+        score_separation,
         int((np.array(list(betas.values())) > 0).sum()),
         len(betas),
     )

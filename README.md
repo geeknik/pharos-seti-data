@@ -14,13 +14,17 @@ This repository contains the methodology, scoring code, control populations, and
 
 | Version | Scope | State |
 |---|---|---|
-| v0.1 | IR / Astrometric Confounder Benchmark | In development |
+| v0.1.0 | IR / Astrometric Confounder Benchmark | Released pilot; post-release conformance gaps documented |
+| v0.1.1 | Global β calibration + X-ray attenuation | Failed registered attempt; did not ship |
+| v0.1.2 | Subtype-aware confounders + X-ray evidence | Pre-registration frozen; implementation pending |
 | v0.2 | Time-domain integration (TESS, Kepler, ZTF) | Not started |
 | v0.3 | Radio coverage (Breakthrough Listen, COSMIC) | Not started |
 | v0.4 | Spectral residual integration (HIRES, HARPS, LAMOST) | Not started |
 | v1.0 | Public cross-modal leaderboard | Not started |
 
-v0.1's pass criterion is concrete: the system must demote the three Hephaistos candidates with known or suspected background-source contamination into `discard_confounded` or `needs_human_review`, and must not promote the remaining four into top-tier `ir_followup` without independent inspection. See [`pre_registration/v0.1_ir_benchmark.md`](pre_registration/v0.1_ir_benchmark.md) for the frozen scoring rules.
+v0.1.0 passed its Hephaistos classification, synthetic-injection, and held-out-null FDR checks. A post-release audit also found that it did **not** satisfy every frozen release requirement: the quiet-negative population was smaller than registered, registered exclusions were not fully applied, and several promised derived artifacts were absent. Treat v0.1.0 as a pilot benchmark, not a complete catalog release. See [`docs/release_manifest_v0.1.0.md`](docs/release_manifest_v0.1.0.md) for the exact payload and conformance record.
+
+The failed v0.1.1 attempt is preserved under [`pre_registration/failed_attempts/`](pre_registration/failed_attempts/). Its fitted weights and X-ray attenuation rule are not active. The superseding v0.1.2 rules are frozen in [`pre_registration/v0.1.2_subtype_confounders_and_xray_evidence.md`](pre_registration/v0.1.2_subtype_confounders_and_xray_evidence.md).
 
 ## Repository Layout
 
@@ -35,9 +39,9 @@ tests/                       — benchmark harness (Hephaistos demotion test, in
 docs/                        — model card, release notes
 ```
 
-## Data Releases
+## Releases
 
-Versioned data releases are published to Zenodo with DOIs. Each release ships the ranked catalog, modality scores, confounder vectors, coverage masks, control populations, and a frozen pre-registration document. Release artifacts are listed in [manuscript.md §8](manuscript.md).
+Versioned releases are published to Zenodo with DOIs. The v0.1.0 Zenodo record contains the tagged software snapshot plus benchmark/control artifacts; it does not contain the complete derived catalog artifact set described for v1.0 in [manuscript.md §8](manuscript.md). Every future release must publish and verify an exact payload manifest before it is described as complete.
 
 ## Citation
 

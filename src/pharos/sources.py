@@ -271,25 +271,19 @@ def build_quiet_negative_gaia_adql(limit: int | None = None) -> str:
     select_clause = ",\n  ".join(_GAIA_SOURCE_COLUMNS)
     where_clauses = [
         f"parallax_over_error >= {cov['parallax_over_error_min']}",
-        f"parallax > 0",
+        "parallax > 0",
         f"phot_g_mean_mag <= {cov['g_mag_max']}",
         f"parallax >= {1000.0 / cov['distance_pc_max']:.6f}",
         f"ruwe < {qn['ruwe_max']}",
-        f"duplicated_source = 'false'",
-        f"non_single_star = 0",
+        "duplicated_source = 'false'",
+        "non_single_star = 0",
         f"classprob_dsc_combmod_galaxy < {qn['galaxy_prob_max']}",
         f"classprob_dsc_combmod_quasar < {qn['quasar_prob_max']}",
         f"ABS(b) > {qn['galactic_latitude_min_deg']}",
     ]
     where_block = "\n  AND ".join(where_clauses)
     head = "SELECT TOP " + str(int(limit)) if limit else "SELECT"
-    return (
-        head
-        + "\n  "
-        + select_clause
-        + f"\nFROM {GAIA_SOURCE_TABLE}\nWHERE\n  "
-        + where_block
-    )
+    return head + "\n  " + select_clause + f"\nFROM {GAIA_SOURCE_TABLE}\nWHERE\n  " + where_block
 
 
 def build_allwise_for_ids_adql(source_ids: Iterable[int]) -> str:
@@ -495,9 +489,7 @@ def _maybe_login() -> None:
         Gaia.login(credentials_file=str(path), verbose=False)
     except Exception as exc:  # noqa: BLE001 — log only, never expose creds
         _login_state = "anonymous"
-        logger.warning(
-            "Gaia login raised %s; falling back to anonymous", type(exc).__name__
-        )
+        logger.warning("Gaia login raised %s; falling back to anonymous", type(exc).__name__)
         return
 
     # Astroquery's Gaia.login() may log an error and return normally on
@@ -555,9 +547,7 @@ def _execute_tap_query(query_text: str) -> pd.DataFrame:
     # calls wait_for_job_end() which polls in a tight loop — and that
     # polling connection is what's getting reset during the DR4 transition.
     def _submit() -> object:
-        return Gaia.launch_job_async(
-            query_text, dump_to_file=False, background=True
-        )
+        return Gaia.launch_job_async(query_text, dump_to_file=False, background=True)
 
     job = _with_transient_retry(
         _submit,
@@ -575,8 +565,7 @@ def _execute_tap_query(query_text: str) -> pd.DataFrame:
     while True:
         if time.monotonic() > deadline:
             raise TimeoutError(
-                f"Gaia job {job_id} did not complete within "
-                f"{_TAP_POLL_TIMEOUT_SECONDS}s"
+                f"Gaia job {job_id} did not complete within {_TAP_POLL_TIMEOUT_SECONDS}s"
             )
         try:
             phase = job.get_phase(update=True)
@@ -594,7 +583,9 @@ def _execute_tap_query(query_text: str) -> pd.DataFrame:
             raise RuntimeError(f"Gaia job {job_id} ended with phase {phase}")
         logger.debug(
             "job %s phase=%s; sleeping %ds",
-            job_id, phase, _TAP_POLL_INTERVAL_SECONDS,
+            job_id,
+            phase,
+            _TAP_POLL_INTERVAL_SECONDS,
         )
         time.sleep(_TAP_POLL_INTERVAL_SECONDS)
 
@@ -652,36 +643,37 @@ def _with_transient_retry(
 def fetch_quiet_negative_controls(
     cache_path: Path,
     *,
-    limit: int | None = 5_000,
+    limit: int | None = 50_000,
     use_cache: bool = True,
 ) -> SourceQueryResult:
-    """Fetch the pre-registered quiet-negative control population.
+    """Fetch the raw quiet-negative candidate pool.
 
     Submitted as three short, indexed queries rather than a single
     5-way JOIN (which times out on the Gaia archive's DR4-transition
-    server). The combined query text and its SHA-256 are stored as the
-    cache's provenance so changes to any of the three sub-queries
-    invalidate the cache.
+    server). The legacy cache key covers only the first Gaia query;
+    the sidecar records all submitted query text but is not sufficient
+    for conformant release provenance. v0.1.2 must replace this cache
+    contract before the pool can be used for calibration.
 
-    Note: SIMBAD-based YSO / AGN / debris-disk exclusion (pre-reg §6) is
-    not encoded in this query. Apply that filter as a separate post-query
-    step against an external catalog crossmatch before the quiet-negative
-    population is used for empirical p-value calibration.
+    This fetch is not by itself a conformant quiet-negative population.
+    The magnitude-binned BP/RP-excess cut and SIMBAD-based YSO / AGN /
+    debris-disk exclusions (pre-reg §6) are not encoded here. Apply and
+    provenance those filters before using the result for empirical
+    p-value calibration. The v0.1.0 release did not do so; see the release
+    conformance record.
     """
     gaia_query = build_quiet_negative_gaia_adql(limit=limit)
-    # Hash placeholder for the gaia step; final hash is the combined text.
+    # Legacy cache key covers only the Gaia step. Do not treat this as
+    # conformant multi-query provenance for a release calibration set.
     if use_cache and cache_path.exists():
-        # Best-effort cache load: compare against the gaia-step hash. We
-        # accept a cache hit if at least the first step's hash matches —
-        # downstream steps depend deterministically on the resulting IDs.
+        # Best-effort legacy cache load: compare against the Gaia-step hash.
+        # Downstream query text is recorded but not independently validated.
         sidecar = cache_path.with_suffix(cache_path.suffix + ".meta")
         if sidecar.exists():
             cached_hash = sidecar.read_text(encoding="utf-8").splitlines()[0]
             if cached_hash == _hash_query(gaia_query):
                 df = pd.read_parquet(cache_path)
-                logger.info(
-                    "loaded quiet-negative cache (%d rows)", len(df)
-                )
+                logger.info("loaded quiet-negative cache (%d rows)", len(df))
                 return SourceQueryResult(
                     sources=df,
                     query_text=gaia_query,
@@ -714,9 +706,7 @@ def fetch_quiet_negative_controls(
         len(merged),
     )
 
-    combined_text = "\n-- STEP 2 --\n".join(
-        [gaia_query, allwise_query, tmass_query]
-    )
+    combined_text = "\n-- NEXT STEP --\n".join([gaia_query, allwise_query, tmass_query])
     result = SourceQueryResult(
         sources=merged,
         query_text=combined_text,
@@ -738,9 +728,7 @@ def _build_gaia_by_ids_adql(ids: list[int]) -> str:
     select_clause = ",\n  ".join(_GAIA_SOURCE_COLUMNS)
     id_str = ", ".join(str(sid) for sid in ids)
     return (
-        "SELECT\n  "
-        + select_clause
-        + f"\nFROM {GAIA_SOURCE_TABLE}\nWHERE source_id IN ({id_str})"
+        "SELECT\n  " + select_clause + f"\nFROM {GAIA_SOURCE_TABLE}\nWHERE source_id IN ({id_str})"
     )
 
 
@@ -808,7 +796,8 @@ def fetch_targets_by_source_id(
     n_chunks = len(chunks)
     logger.info(
         "fetching %d targets via 3-step split (gaia + allwise + 2mass), %d chunks each",
-        len(id_list), n_chunks,
+        len(id_list),
+        n_chunks,
     )
 
     gaia_parts: list[pd.DataFrame] = []
@@ -831,7 +820,10 @@ def fetch_targets_by_source_id(
     )
     logger.info(
         "merged: %d gaia × %d allwise × %d 2mass -> %d joined rows",
-        len(gaia_df), len(allwise_df), len(tmass_df), len(df),
+        len(gaia_df),
+        len(allwise_df),
+        len(tmass_df),
+        len(df),
     )
 
     result = SourceQueryResult(

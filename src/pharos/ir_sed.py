@@ -15,12 +15,9 @@ Stratification bins must match the pre-registered bins in
 ``pre_registration/v0.1_ir_benchmark.md`` §4. Adjusting them requires a
 versioned superseding pre-registration document.
 
-The pre-reg currently specifies a BT-Settl synthetic SED grid. v0.1 uses
-the data-driven stellar-locus approach below instead, which is simpler,
-has no external grid dependency, and is empirically defensible because
-the quiet-negative control population is itself defined as clean
-main-sequence sources. The pre-reg will need a minor amendment (or
-v0.1.1) to reflect this choice before freeze.
+The frozen v0.1 registration specifies the data-driven stellar-locus
+approach below. The published v0.1.0 cache is smaller and less completely
+filtered than that registration required; see docs/release_manifest_v0.1.0.md.
 """
 
 from __future__ import annotations
@@ -124,9 +121,7 @@ def add_stratification_bins(df: pd.DataFrame) -> pd.DataFrame:
         out["gmag_bin"] = np.nan
     else:
         gmag_edges = np.arange(g_min, g_max + GMAG_BIN_WIDTH, GMAG_BIN_WIDTH)
-        out["gmag_bin"] = pd.cut(
-            out["phot_g_mean_mag"], bins=gmag_edges, labels=False, right=False
-        )
+        out["gmag_bin"] = pd.cut(out["phot_g_mean_mag"], bins=gmag_edges, labels=False, right=False)
 
     distance_pc = 1000.0 / out["parallax"].where(out["parallax"] > 0)
     out["distance_pc"] = distance_pc
@@ -139,9 +134,7 @@ def add_stratification_bins(df: pd.DataFrame) -> pd.DataFrame:
 
     abs_b = out["galactic_b"].abs()
     out["abs_galactic_b"] = abs_b
-    out["lat_bin"] = pd.cut(
-        abs_b, bins=list(GALACTIC_LAT_BIN_EDGES_DEG), labels=False, right=False
-    )
+    out["lat_bin"] = pd.cut(abs_b, bins=list(GALACTIC_LAT_BIN_EDGES_DEG), labels=False, right=False)
     return out
 
 
@@ -168,11 +161,15 @@ def fit_control_locus(controls: pd.DataFrame) -> ControlLocus:
             raise ValueError(f"controls missing column {col!r}")
 
     grouped = controls.groupby(list(_BIN_COLS), dropna=False)
-    medians = grouped[["w3_ks", "w4_ks"]].median().rename(
-        columns={"w3_ks": "w3_ks_median", "w4_ks": "w4_ks_median"}
+    medians = (
+        grouped[["w3_ks", "w4_ks"]]
+        .median()
+        .rename(columns={"w3_ks": "w3_ks_median", "w4_ks": "w4_ks_median"})
     )
-    iqrs = grouped[["w3_ks", "w4_ks"]].agg(_robust_iqr).rename(
-        columns={"w3_ks": "w3_ks_iqr", "w4_ks": "w4_ks_iqr"}
+    iqrs = (
+        grouped[["w3_ks", "w4_ks"]]
+        .agg(_robust_iqr)
+        .rename(columns={"w3_ks": "w3_ks_iqr", "w4_ks": "w4_ks_iqr"})
     )
     counts = grouped.size().rename("n_controls")
     logger.info(
@@ -287,6 +284,4 @@ def composite_ir_evidence_raw(scores: pd.DataFrame) -> pd.Series:
     """
     w3 = scores["w3_ks_residual_z"]
     w4 = scores["w4_ks_residual_z"]
-    return np.fmax(w3.fillna(-math.inf), w4.fillna(-math.inf)).replace(
-        -math.inf, math.nan
-    )
+    return np.fmax(w3.fillna(-math.inf), w4.fillna(-math.inf)).replace(-math.inf, math.nan)

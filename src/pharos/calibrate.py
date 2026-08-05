@@ -51,9 +51,7 @@ def laplace_tail_p_values(
 
     # searchsorted on the sorted controls. count of controls >= s is
     # n_controls - searchsorted(controls_sorted, s, side='left').
-    insert_positions = np.searchsorted(
-        controls_sorted, target[finite_mask], side="left"
-    )
+    insert_positions = np.searchsorted(controls_sorted, target[finite_mask], side="left")
     counts_ge = n_controls - insert_positions
     out[finite_mask] = (1.0 + counts_ge) / (1.0 + n_controls)
     return out
@@ -89,7 +87,7 @@ def benjamini_hochberg(p_values: np.ndarray) -> np.ndarray:
 
     order = np.argsort(p_finite)
     p_sorted = p_finite[order]
-    ranks = np.arange(1, n + 1, dtype=float)
+    ranks: np.ndarray = np.arange(1, n + 1, dtype=float)
     q_sorted = p_sorted * n / ranks
 
     # Enforce monotone non-decreasing q as p increases:

@@ -3,11 +3,13 @@
 **Released:** 2026-05-11
 **Pre-registration:** [`pre_registration/v0.1_ir_benchmark.md`](pre_registration/v0.1_ir_benchmark.md) — FROZEN 2026-05-11, SHA-256 `0784859d8cad230d98a43c14e84862396855f590586dd72b29c7e2676963d38c`
 
+> **Post-release audit notice (2026-08-05):** The three executed benchmark families below passed, but v0.1.0 did not satisfy every frozen release requirement. The quiet-negative cache contains 2,451 sources rather than the registered minimum of 50,000; the registered magnitude-binned BP/RP-excess and external SIMBAD/debris-disk exclusions were not applied; and the Zenodo payload omits several registered derived tables and the reproduction notebook. v0.1.0 is therefore a released pilot benchmark, not a fully conformant catalog release. The immutable payload and gaps are recorded in [`docs/release_manifest_v0.1.0.md`](docs/release_manifest_v0.1.0.md).
+
 ## What v0.1 establishes
 
 Pharos v0.1 is the wedge release of the Technosignature Lead Graph: an end-to-end pipeline that takes Gaia DR3 + AllWISE + 2MASS archival data and produces a confounder-penalised re-observation ranking within the WISE-only coverage class. The release demonstrates that the system can **demote seductive false positives before promoting anything**.
 
-This is not a technosignature detection. It is a calibrated archival ranking instrument with its first scientific gate passed.
+This is not a technosignature detection. It is a pilot archival ranking benchmark whose executed Hephaistos, injection-recovery, and held-out-null FDR gates passed. The post-release audit notice above bounds that claim.
 
 ## Pass-criterion results
 
@@ -101,11 +103,12 @@ pytest
 
 ## Citation
 
-A Zenodo DOI for this release will be minted via the GitHub-Zenodo integration on tag publication. Cite this software release alongside the methodology manuscript.
+The published v0.1.0 archive DOI is [`10.5281/zenodo.20130607`](https://doi.org/10.5281/zenodo.20130607). Cite this software/benchmark snapshot alongside the methodology manuscript and consult [`LICENSE-DATA`](LICENSE-DATA) for the data-artifact license.
 
 ## Next
 
-- v0.1.1: β-weight calibration against the contaminant-positive control set; HOT DOG X-ray-null cross-match.
+- v0.1.1: attempted β-weight calibration and X-ray attenuation; failed the retained Hephaistos gate and did not ship.
+- v0.1.2: frozen subtype-aware confounder and coverage-aware X-ray evidence redesign; implementation pending.
 - v0.2: Time-domain integration (TESS, Kepler, ZTF). Per-transit residual scoring.
 - v0.3: Radio coverage (Breakthrough Listen, COSMIC). Enables full demotion of Hephaistos candidate A.
 - v0.4: Spectral residual integration.

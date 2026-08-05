@@ -6,7 +6,6 @@ deterministic synthetic data. No network access required.
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 import pytest
 
@@ -45,12 +44,8 @@ def _make_contaminated_row(source_id: int) -> dict:
 
 class TestCalibrateBetas:
     def test_perfect_separation_drives_positive_betas(self) -> None:
-        contaminants = pd.DataFrame(
-            [_make_contaminated_row(i) for i in range(1, 21)]
-        )
-        controls = pd.DataFrame(
-            [_make_clean_row(i) for i in range(1000, 1100)]
-        )
+        contaminants = pd.DataFrame([_make_contaminated_row(i) for i in range(1, 21)])
+        controls = pd.DataFrame([_make_clean_row(i) for i in range(1000, 1100)])
         result = calibration.calibrate_betas(contaminants, controls)
         # At least one β must be non-zero per pre-reg §4.5
         assert any(v > 0 for v in result.betas.values())
@@ -86,14 +81,12 @@ class TestCalibrateBetas:
         if result.fit_metadata["non_negative_clipping_changed_components"] > 0:
             assert any(
                 raw < 0 and clipped == 0
-                for raw, clipped in zip(
-                    result.raw_betas.values(), result.betas.values()
-                )
+                for raw, clipped in zip(result.raw_betas.values(), result.betas.values())
             )
 
 
-class TestXrayAwareHotDog:
-    def test_xray_detection_attenuates_to_zero(self) -> None:
+class TestXrayDoesNotAttenuateHotDog:
+    def test_xray_detection_does_not_reduce_hot_dog_component(self) -> None:
         row = {
             "gaia_dr3_source_id": 1,
             "wise_xm_angular_distance": 0.05,
@@ -115,9 +108,9 @@ class TestXrayAwareHotDog:
         }
         df = pd.DataFrame([row])
         result = confounders.compute_confounder_scores(df)
-        # Base heuristic would fire (faint G + bright W3) → 1.0;
-        # X-ray detection should attenuate to 0.
-        assert result.vector["p_hot_dog"].iloc[0] == 0.0
+        # X-ray detections occur in obscured AGN/HOT DOG populations and
+        # cannot be used to rule the phenotype out.
+        assert result.vector["p_hot_dog"].iloc[0] == 1.0
 
     def test_xray_unconstrained_keeps_v01_heuristic(self) -> None:
         row = {

@@ -60,7 +60,7 @@ IR layer confounder penalties:
 - `classprob_dsc_combmod_galaxy` and `classprob_dsc_combmod_quasar` from Gaia DSC
 - Galactic latitude penalty (|b| < 10°)
 - YSO and debris-disk color profile indicators from spectroscopic survey crossmatch
-- HOT DOG probability: faint optical / near-IR, bright mid-IR, no X-ray counterpart pattern
+- HOT DOG / obscured-AGN phenotype: faint optical / near-IR and bright mid-IR. X-ray detections and non-detections are retained with footprint and sensitivity metadata; neither is used as a binary exclusion.
 
 ### 3.3 Time-Domain Optical Layer
 Standard exoplanet photometry phase-folds transits on the assumption that each event is identical. This is precisely the step that erases non-repeating or morphologically variable transit events. Zuckerman et al. applied individual-transit residual detection to 218 confirmed Kepler transiting exoplanet systems, explicitly noting that phase-folding suppresses information about modification of transit signals.
@@ -267,6 +267,8 @@ The VERITAS/CALIOP result is the model for `calibration_positive`: the pipeline 
 ***
 ## 8. Public Release Artifacts
 
+The following is the complete-release contract targeted for v1.0. Pilot releases may contain a registered subset, but each release must publish an exact payload manifest and may not claim absent artifacts.
+
 ```
 lead_graph_catalog_v1.csv          — ranked source table (all schema columns)
 modality_scores.parquet            — per-source raw and calibrated E_i per modality
@@ -301,6 +303,8 @@ The `pre_registration/` directory is the scientific hygiene anchor. Geometry pri
 *Pass criterion:* The graph must demote Hephaistos candidate G into `discard_confounded` based on the confirmed background AGN evidence, and must demote candidates A and B into `discard_confounded` or `needs_human_review` based on suspected background-source contamination. The remaining four Hephaistos candidates must not receive top-tier `ir_followup` status unless their WISE centroids, crossmatch quality, local background environment, and independent modality checks survive inspection. If the graph cannot pass this stress test, the confounder model is not production-ready.
 
 *Outputs:* `ir_evidence`, `wise_confusion_score`, `distance_discrepancy_noparallax_z` (for sources with external spectroscopy), `confounder_vector`, and a ranked IR lead list with empirical p-values and BH q-values within the WISE-coverage class.
+
+*Implementation status:* v0.1.0 was published as a pilot benchmark. Its Hephaistos, injection-recovery, and held-out-null checks passed on the archived fixtures, but a post-release audit found that the quiet-negative population and artifact payload did not fully satisfy the frozen registration. See `docs/release_manifest_v0.1.0.md`. The failed v0.1.1 attempt did not ship; v0.1.2 pre-registers the replacement confounder/X-ray semantics.
 
 ### v0.2 — Time-Domain Integration
 Add TESS/Kepler per-transit residual scores and ZTF dipper scores. Build `calibration_positive` set for time-domain channel. Confirm that quiet-negative controls score near zero in time-domain modality (within covered epochs only) and that Boyajian's Star processes correctly as a high-anomaly, ambiguous-confounder source that lands in `needs_human_review`, not `ir_followup`.

@@ -1,4 +1,4 @@
-"""X-ray cross-match for Pharos v0.1.1 HOT DOG component.
+"""Historical v0.1.1 X-ray cross-match infrastructure.
 
 Pre-registration v0.1.1 §2 requires a positional cross-match of every
 source against four public X-ray catalogs:
@@ -8,19 +8,22 @@ source against four public X-ray catalogs:
   - eROSITA-DE DR1    (Merloni et al. 2024, German half-sky)
   - Chandra CSC v2.0  (Evans et al. 2010+)
 
-The HOT DOG indicator's X-ray-null requirement consults these results:
-a source with any X-ray detection at its Gaia DR3 position (within 10″)
-has its HOT DOG probability attenuated to zero. Coverage is recorded
-explicitly so a source outside all catalog footprints is treated as
-"X-ray unconstrained" rather than "X-ray null."
+The registered v0.1.1 attenuation rule failed scientific review and is
+inactive: X-ray detection does not rule out an obscured AGN or HOT DOG.
+This module currently produces match diagnostics only. Its XMM/Chandra
+coverage proxy is not sufficient for null interpretation because it does
+not query observation footprints or limiting sensitivity. Do not use its
+``xray_coverage_count`` in scientific scoring.
 
 The cross-match runs per-catalog via Vizier cone searches. CDS XMatch
 would be faster for batch queries but the Vizier table identifiers for
 the eROSITA-DE DR1 release are not yet routed through XMatch reliably
 during the DR4 transition, so we use direct Vizier queries.
 
-Network access is encapsulated in ``fetch_xray_crossmatch``. Everything
-else in the module is pure and deterministic.
+The frozen v0.1.2 pre-registration requires a coverage- and sensitivity-
+aware replacement before X-ray evidence can ship. Network access remains
+encapsulated in ``fetch_xray_crossmatch`` for reproduction of the failed
+attempt.
 """
 
 from __future__ import annotations
@@ -45,8 +48,8 @@ XRAY_SEARCH_RADIUS_ARCSEC: float = 10.0
 # Vizier catalog identifiers used for the cone queries. These map to the
 # specific table that holds the per-source detections (not the metadata).
 XRAY_CATALOGS: dict[str, str] = {
-    "2rxs": "IX/29/rass",      # Boller et al. 2016 (2RXS)
-    "xmm": "IX/69/xmm5dr14",   # XMM-Newton Serendipitous Source Catalog
+    "2rxs": "IX/29/rass",  # Boller et al. 2016 (2RXS)
+    "xmm": "IX/69/xmm5dr14",  # XMM-Newton Serendipitous Source Catalog
     "erosita": "J/A+A/682/A34/table1",  # Merloni et al. 2024 (eROSITA-DE DR1)
     "chandra": "IX/57/csc2master",  # Chandra Source Catalog v2 master
 }
@@ -115,11 +118,10 @@ def fetch_xray_crossmatch(
     summary = _empty_match_summary(positions)
     match_rows: list[dict] = []
 
-    # 2RXS is all-sky, so every source has 2RXS coverage. eROSITA-DE has
-    # half-sky coverage that we can determine from galactic longitude
-    # alone. XMM and Chandra are pointed — we treat coverage as
-    # "match implies coverage" plus an explicit "out-of-FOV" tag from
-    # the catalog metadata where applicable.
+    # Historical v0.1.1 proxy only. 2RXS is all-sky and eROSITA-DE has a
+    # geometric half-sky release. XMM/Chandra matches imply coverage, but
+    # non-matches remain unknown because this function does not query the
+    # pointed-observation footprints or local limiting sensitivities.
     coverage_2rxs = pd.Series(True, index=summary.index)
     coverage_erosita = _erosita_de_covers(positions["galactic_l"])
 
@@ -129,12 +131,13 @@ def fetch_xray_crossmatch(
         vizier_id = XRAY_CATALOGS[cat]
         logger.info(
             "X-ray cross-match: %s (vizier:%s) over %d positions, radius=%.1f″",
-            cat, vizier_id, len(positions), search_radius_arcsec,
+            cat,
+            vizier_id,
+            len(positions),
+            search_radius_arcsec,
         )
         for idx, row in positions.iterrows():
-            coord = SkyCoord(
-                ra=row["ra"] * u.deg, dec=row["dec"] * u.deg, frame="icrs"
-            )
+            coord = SkyCoord(ra=row["ra"] * u.deg, dec=row["dec"] * u.deg, frame="icrs")
             try:
                 tables = Vizier.query_region(
                     coord, radius=search_radius_arcsec * u.arcsec, catalog=vizier_id
@@ -142,7 +145,9 @@ def fetch_xray_crossmatch(
             except Exception as exc:  # noqa: BLE001 — log and continue
                 logger.warning(
                     "vizier query failed for source %s in %s: %s",
-                    row["gaia_dr3_source_id"], cat, exc,
+                    row["gaia_dr3_source_id"],
+                    cat,
+                    exc,
                 )
                 continue
             time.sleep(_PER_QUERY_SLEEP_SECONDS)
@@ -189,9 +194,9 @@ def fetch_xray_crossmatch(
     )
     return XrayCrossmatchResult(
         summary=summary,
-        matches=pd.DataFrame(match_rows) if match_rows else pd.DataFrame(
-            columns=["gaia_dr3_source_id", "catalog", "n_matches", "min_arcsec"]
-        ),
+        matches=pd.DataFrame(match_rows)
+        if match_rows
+        else pd.DataFrame(columns=["gaia_dr3_source_id", "catalog", "n_matches", "min_arcsec"]),
     )
 
 
@@ -209,16 +214,12 @@ def _min_angular_distance(coord, table) -> float:
     dec_col = next((c for c in dec_candidates if c in table.colnames), None)
     if ra_col is None or dec_col is None:
         return float("nan")
-    cat_coords = SkyCoord(
-        ra=table[ra_col] * u.deg, dec=table[dec_col] * u.deg, frame="icrs"
-    )
+    cat_coords = SkyCoord(ra=table[ra_col] * u.deg, dec=table[dec_col] * u.deg, frame="icrs")
     seps = coord.separation(cat_coords).to(u.arcsec).value
     return float(np.min(seps))
 
 
-def save_xray_crossmatch(
-    result: XrayCrossmatchResult, output_dir: Path
-) -> None:
+def save_xray_crossmatch(result: XrayCrossmatchResult, output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     result.summary.to_parquet(output_dir / "xray_summary.parquet", index=False)
     result.matches.to_parquet(output_dir / "xray_matches.parquet", index=False)

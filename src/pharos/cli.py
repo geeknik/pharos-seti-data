@@ -1,17 +1,20 @@
 """Command-line entry points for Pharos data and benchmark workflows.
 
-The primary source-fetch subcommands are:
+The conformant v0.1.2 control-population command is:
 
-    python -m pharos.cli fetch_quiet_negative \\
-        --output controls/cache/quiet_negative.parquet \\
-        --limit 100000
+    python -m pharos.cli build_quiet_negative_v012 \\
+        --output-dir controls/quiet_negative_v0.1.2 \\
+        --raw-cache controls/cache/quiet_negative_v0.1.2.raw.parquet \\
+        --minimum-joined 55000
+
+The historical target-fetch command is:
 
     python -m pharos.cli fetch_hephaistos \\
         --registry controls/hephaistos.yaml \\
         --output controls/cache/hephaistos_join.parquet
 
-Both submit registered ADQL to the Gaia archive (gea.esac.esa.int)
-and cache the results to parquet. The ``fetch_hephaistos`` command also
+Both workflows submit registered ADQL to the Gaia archive (gea.esac.esa.int).
+The ``fetch_hephaistos`` command also
 merges in W1↔W3 photocentre offsets and other per-candidate fields from
 ``controls/hephaistos.yaml`` (Suazo et al. 2024 Table 5 / Table 7), so
 the resulting parquet has the source columns used by the v0.1 pilot.
@@ -23,13 +26,24 @@ from __future__ import annotations
 
 import argparse
 import logging
+import shlex
 import sys
 from pathlib import Path
 
 import pandas as pd
 import yaml
 
-from pharos import calibration, contaminants, fdr_report, injection, ir_sed, sources, xray
+from pharos import (
+    artifacts,
+    calibration,
+    contaminants,
+    control_population,
+    fdr_report,
+    injection,
+    ir_sed,
+    sources,
+    xray,
+)
 
 logger = logging.getLogger("pharos.cli")
 
@@ -71,6 +85,62 @@ def cmd_fetch_quiet_negative(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_repository_relative_path(value: str, *, label: str) -> tuple[Path, str]:
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        raise ValueError(f"{label} must be a repository-relative path without '..'")
+    repository_root = Path(__file__).resolve().parents[2]
+    resolved = (repository_root / relative).resolve(strict=False)
+    if not resolved.is_relative_to(repository_root):
+        raise ValueError(f"{label} resolves outside the repository")
+    return resolved, relative.as_posix()
+
+
+def cmd_build_quiet_negative_v012(args: argparse.Namespace) -> int:
+    """Build the conformant v0.1.2 fixture without fitting a model."""
+    try:
+        output_dir, output_arg = _resolve_repository_relative_path(
+            args.output_dir, label="output_dir"
+        )
+        raw_cache, raw_cache_arg = _resolve_repository_relative_path(
+            args.raw_cache, label="raw_cache"
+        )
+    except ValueError as exc:
+        logger.error("invalid path argument: %s", exc)
+        return 2
+    command_parts = [
+        "python",
+        "-m",
+        "pharos.cli",
+        "build_quiet_negative_v012",
+        "--output-dir",
+        output_arg,
+        "--raw-cache",
+        raw_cache_arg,
+        "--minimum-joined",
+        str(args.minimum_joined),
+    ]
+    if args.force_refresh:
+        command_parts.append("--force-refresh")
+    generating_command = shlex.join(command_parts)
+    result = control_population.build_quiet_negative_v012(
+        output_dir=output_dir,
+        raw_cache_path=raw_cache,
+        minimum_joined_rows=args.minimum_joined,
+        generating_command=generating_command,
+        use_raw_cache=not args.force_refresh,
+    )
+    logger.info(
+        "v0.1.2 quiet-negative artifact validated: rows=%d exclusions=%d manifest=%s",
+        len(result.controls),
+        len(result.exclusions),
+        result.manifest_path,
+    )
+    print(f"validated rows: {len(result.controls)}")
+    print(f"manifest: {result.manifest_path.relative_to(Path(__file__).resolve().parents[2])}")
+    return 0
+
+
 def _load_registry(registry_path: Path) -> dict:
     with open(registry_path, encoding="utf-8") as f:
         return yaml.safe_load(f)
@@ -90,13 +160,16 @@ def _extract_candidate_overrides(registry: dict) -> pd.DataFrame:
 
 
 def cmd_run_injection_recovery(args: argparse.Namespace) -> int:
-    controls_path = Path(args.controls).resolve()
+    controls_manifest_path = Path(args.controls_manifest).resolve()
     output_dir = Path(args.output_dir).resolve()
-    if not controls_path.exists():
-        logger.error("controls cache not found: %s", controls_path)
+    if not controls_manifest_path.exists():
+        logger.error("controls manifest not found: %s", controls_manifest_path)
         return 1
-
-    controls = pd.read_parquet(controls_path)
+    try:
+        controls = artifacts.load_control_artifact(controls_manifest_path)
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        logger.error("refusing nonconformant controls: %s", exc)
+        return 2
     controls = ir_sed.add_stratification_bins(ir_sed.add_color_indices(controls))
 
     result = injection.run_injection_recovery(
@@ -125,13 +198,13 @@ def cmd_run_injection_recovery(args: argparse.Namespace) -> int:
 
 def cmd_run_calibration(args: argparse.Namespace) -> int:
     contaminants_path = Path(args.contaminants).resolve()
-    controls_path = Path(args.controls).resolve()
+    controls_manifest_path = Path(args.controls_manifest).resolve()
     output_path = Path(args.output).resolve()
     pre_reg_path = Path(args.pre_registration).resolve()
 
     for path, label in [
         (contaminants_path, "contaminants"),
-        (controls_path, "controls"),
+        (controls_manifest_path, "controls_manifest"),
         (pre_reg_path, "pre_registration"),
     ]:
         if not path.exists():
@@ -139,7 +212,17 @@ def cmd_run_calibration(args: argparse.Namespace) -> int:
             return 1
 
     contam_df = pd.read_parquet(contaminants_path)
-    controls_df = pd.read_parquet(controls_path)
+    try:
+        controls_df = artifacts.load_control_artifact(controls_manifest_path)
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        logger.error("refusing nonconformant controls: %s", exc)
+        return 2
+    controls_path = (
+        controls_manifest_path.parent
+        / yaml.safe_load(controls_manifest_path.read_text(encoding="utf-8"))["artifacts"][
+            "controls"
+        ]["path"]
+    )
 
     # Sources that survive the X-ray cross-match are augmented with the
     # xray_any_detection / xray_coverage_count columns. When the
@@ -221,13 +304,16 @@ def cmd_fetch_xray(args: argparse.Namespace) -> int:
 
 
 def cmd_run_fdr_report(args: argparse.Namespace) -> int:
-    controls_path = Path(args.controls).resolve()
+    controls_manifest_path = Path(args.controls_manifest).resolve()
     output_dir = Path(args.output_dir).resolve()
-    if not controls_path.exists():
-        logger.error("controls cache not found: %s", controls_path)
+    if not controls_manifest_path.exists():
+        logger.error("controls manifest not found: %s", controls_manifest_path)
         return 1
-
-    controls = pd.read_parquet(controls_path)
+    try:
+        controls = artifacts.load_control_artifact(controls_manifest_path)
+    except (FileNotFoundError, TypeError, ValueError) as exc:
+        logger.error("refusing nonconformant controls: %s", exc)
+        return 2
     controls = ir_sed.add_stratification_bins(ir_sed.add_color_indices(controls))
 
     result = fdr_report.run_fdr_report(
@@ -301,14 +387,40 @@ def build_parser() -> argparse.ArgumentParser:
     qn.add_argument("--force-refresh", action="store_true", help="Ignore any existing cache.")
     qn.set_defaults(func=cmd_fetch_quiet_negative)
 
+    qn_v012 = subparsers.add_parser(
+        "build_quiet_negative_v012",
+        help=(
+            "Build the conformant v0.1.2 quiet-negative fixture with BP/RP, "
+            "SIMBAD, Chen, schema, provenance, and atomic-write gates."
+        ),
+    )
+    qn_v012.add_argument(
+        "--output-dir",
+        default="controls/quiet_negative_v0.1.2",
+        help="Repository-relative output directory for immutable parquets + manifest.",
+    )
+    qn_v012.add_argument(
+        "--raw-cache",
+        default="controls/cache/quiet_negative_v0.1.2.raw.parquet",
+        help="Repository-relative raw joined-candidate cache.",
+    )
+    qn_v012.add_argument(
+        "--minimum-joined",
+        type=int,
+        default=55_000,
+        help="Minimum joined rows before BP/RP and external exclusions (default 55000).",
+    )
+    qn_v012.add_argument("--force-refresh", action="store_true")
+    qn_v012.set_defaults(func=cmd_build_quiet_negative_v012)
+
     inj = subparsers.add_parser(
         "run_injection_recovery",
         help="Run the v0.1 synthetic-injection recovery test.",
     )
     inj.add_argument(
-        "--controls",
-        default="controls/cache/quiet_negative.parquet",
-        help="Path to the cached quiet-negative population.",
+        "--controls-manifest",
+        default="controls/quiet_negative_v0.1.2/manifest.yaml",
+        help="Path to an exact-schema validated v0.1.2 control manifest.",
     )
     inj.add_argument(
         "--output-dir",
@@ -336,9 +448,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run BH FDR calibration on a held-out null sample.",
     )
     fdr.add_argument(
-        "--controls",
-        default="controls/cache/quiet_negative.parquet",
-        help="Path to the cached quiet-negative population.",
+        "--controls-manifest",
+        default="controls/quiet_negative_v0.1.2/manifest.yaml",
+        help="Path to an exact-schema validated v0.1.2 control manifest.",
     )
     fdr.add_argument(
         "--output-dir",
@@ -404,9 +516,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the contaminant_positive parquet.",
     )
     cal.add_argument(
-        "--controls",
-        default="controls/cache/quiet_negative.parquet",
-        help="Path to the quiet-negative parquet.",
+        "--controls-manifest",
+        default="controls/quiet_negative_v0.1.2/manifest.yaml",
+        help="Path to an exact-schema validated v0.1.2 control manifest.",
     )
     cal.add_argument(
         "--xray-dir",

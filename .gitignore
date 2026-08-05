@@ -44,6 +44,11 @@ data/
 !controls/contaminant_positive/**
 !controls/quiet_negative/**
 
+# Resumable v0.1.2 acquisition checkpoints are local working state. Only the
+# immutable controls/quiet_negative_v0.1.2 artifacts are release payloads.
+controls/cache/quiet_negative_v0.1.2.raw.parquet
+controls/cache/quiet_negative_v0.1.2.raw.parquet.manifest.yaml
+
 # Local environment
 .env
 .env.local

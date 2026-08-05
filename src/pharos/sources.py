@@ -25,20 +25,17 @@ import hashlib
 import logging
 import os
 import stat
+import tempfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+from pharos import artifacts, validation
 
-# Credential file paths checked in order. The first existing, mode-600
-# file is used; everything else falls back to anonymous access. Path
-# resolution is centralised here so it stays out of the call paths.
-_GAIA_CREDENTIALS_PATHS: tuple[Path, ...] = (
-    Path.home() / ".config" / "pharos" / "gaia_credentials.txt",
-)
+logger = logging.getLogger(__name__)
 
 # Module-level flag so we attempt login at most once per process. The
 # value is one of {"unknown", "anonymous", "authenticated"}.
@@ -162,6 +159,17 @@ class SourceQueryResult:
     query_text: str
     query_hash: str
     n_sources: int
+    query_traces: tuple["QueryTrace", ...] = ()
+    gaia_rows: int = 0
+
+
+@dataclass(frozen=True)
+class QueryTrace:
+    """Hash-only provenance for one remote request."""
+
+    service: str
+    query_sha256: str
+    response_rows: int
 
 
 def _hash_query(query_text: str) -> str:
@@ -256,7 +264,7 @@ _TMASS_COLUMNS: tuple[str, ...] = (
 )
 
 
-def build_quiet_negative_gaia_adql(limit: int | None = None) -> str:
+def build_quiet_negative_gaia_adql(limit: int, *, after_source_id: int = 0) -> str:
     """Step 1 of the split quiet-negative query: gaia_source only.
 
     Applies all gaia_source-level predicates from the WISE-only coverage
@@ -265,6 +273,17 @@ def build_quiet_negative_gaia_adql(limit: int | None = None) -> str:
     source IDs and their gaia_source columns for downstream JOINs in
     Python rather than ADQL.
     """
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise TypeError("limit must be an integer")
+    if limit < 1 or limit > validation.MAX_NETWORK_SOURCE_CHUNK:
+        raise ValueError(
+            f"limit must be within [1, {validation.MAX_NETWORK_SOURCE_CHUNK}]"
+        )
+    if not isinstance(after_source_id, int) or isinstance(after_source_id, bool):
+        raise TypeError("after_source_id must be an integer")
+    if after_source_id < 0 or after_source_id.bit_length() > 64:
+        raise ValueError("after_source_id must be an unsigned 64-bit integer")
+
     cov = COVERAGE_CLASS_CUTS
     qn = QUIET_NEGATIVE_CUTS
 
@@ -273,6 +292,7 @@ def build_quiet_negative_gaia_adql(limit: int | None = None) -> str:
         f"parallax_over_error >= {cov['parallax_over_error_min']}",
         "parallax > 0",
         f"phot_g_mean_mag <= {cov['g_mag_max']}",
+        "phot_bp_rp_excess_factor IS NOT NULL",
         f"parallax >= {1000.0 / cov['distance_pc_max']:.6f}",
         f"ruwe < {qn['ruwe_max']}",
         "duplicated_source = 'false'",
@@ -280,10 +300,73 @@ def build_quiet_negative_gaia_adql(limit: int | None = None) -> str:
         f"classprob_dsc_combmod_galaxy < {qn['galaxy_prob_max']}",
         f"classprob_dsc_combmod_quasar < {qn['quasar_prob_max']}",
         f"ABS(b) > {qn['galactic_latitude_min_deg']}",
+        f"source_id > {after_source_id}",
     ]
     where_block = "\n  AND ".join(where_clauses)
-    head = "SELECT TOP " + str(int(limit)) if limit else "SELECT"
-    return head + "\n  " + select_clause + f"\nFROM {GAIA_SOURCE_TABLE}\nWHERE\n  " + where_block
+    return (
+        f"SELECT TOP {limit}\n  "
+        + select_clause
+        + f"\nFROM {GAIA_SOURCE_TABLE}\nWHERE\n  "
+        + where_block
+        + "\nORDER BY source_id"
+    )
+
+
+def build_quiet_negative_joined_adql(limit: int, *, after_source_id: int = 0) -> str:
+    """Build one bounded, keyset-paginated Gaia+AllWISE+2MASS page.
+
+    Page size is capped at 500 by the frozen trust-boundary requirement.
+    Unlike the historical TOP 50,000 join, a TOP 500 page has been probed
+    successfully against the live Gaia TAP service and avoids sending two
+    additional per-source-list requests for every sparse Gaia page.
+    """
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        raise TypeError("limit must be an integer")
+    if limit < 1 or limit > validation.MAX_NETWORK_SOURCE_CHUNK:
+        raise ValueError(
+            f"limit must be within [1, {validation.MAX_NETWORK_SOURCE_CHUNK}]"
+        )
+    if not isinstance(after_source_id, int) or isinstance(after_source_id, bool):
+        raise TypeError("after_source_id must be an integer")
+    if after_source_id < 0 or after_source_id.bit_length() > 64:
+        raise ValueError("after_source_id must be an unsigned 64-bit integer")
+
+    cov = COVERAGE_CLASS_CUTS
+    qn = QUIET_NEGATIVE_CUTS
+    where_clauses = [
+        f"gs.parallax_over_error >= {cov['parallax_over_error_min']}",
+        "gs.parallax > 0",
+        f"gs.phot_g_mean_mag <= {cov['g_mag_max']}",
+        "gs.phot_bp_rp_excess_factor IS NOT NULL",
+        f"gs.parallax >= {1000.0 / cov['distance_pc_max']:.6f}",
+        f"gs.ruwe < {qn['ruwe_max']}",
+        "gs.duplicated_source = 'false'",
+        "gs.non_single_star = 0",
+        f"gs.classprob_dsc_combmod_galaxy < {qn['galaxy_prob_max']}",
+        f"gs.classprob_dsc_combmod_quasar < {qn['quasar_prob_max']}",
+        f"ABS(gs.b) > {qn['galactic_latitude_min_deg']}",
+        f"awbn.angular_distance <= {qn['allwise_angular_distance_max_arcsec']}",
+        f"awbn.number_of_neighbours = {int(qn['allwise_n_neighbours'])}",
+        f"awbn.number_of_mates = {int(qn['allwise_n_mates'])}",
+        f"aw.w1mpro_error <= {1.0857 / cov['w1_snr_min']:.6f}",
+        f"aw.w2mpro_error <= {1.0857 / cov['w2_snr_min']:.6f}",
+        f"aw.w3mpro_error <= {1.0857 / cov['w3_snr_min']:.6f}",
+        "(aw.cc_flags IS NULL OR aw.cc_flags = '0000')",
+        "(aw.ext_flag IS NULL OR aw.ext_flag = 0)",
+        f"tmbn.angular_distance <= {qn['tmass_angular_distance_max_arcsec']}",
+        "tm.ks_m IS NOT NULL",
+        "tm.ks_msigcom IS NOT NULL",
+        f"gs.source_id > {after_source_id}",
+    ]
+    return (
+        f"SELECT TOP {limit}\n  "
+        + _build_select_clause()
+        + "\n"
+        + _build_join_clause()
+        + "\nWHERE\n  "
+        + "\n  AND ".join(where_clauses)
+        + "\nORDER BY gs.source_id"
+    )
 
 
 def build_allwise_for_ids_adql(source_ids: Iterable[int]) -> str:
@@ -301,6 +384,8 @@ def build_allwise_for_ids_adql(source_ids: Iterable[int]) -> str:
     validated = _validate_source_ids(source_ids)
     if not validated:
         raise ValueError("source_ids must contain at least one ID")
+    if len(validated) > validation.MAX_NETWORK_SOURCE_CHUNK:
+        raise ValueError("AllWISE request exceeds the registered 500-source network chunk")
     id_list = ", ".join(str(sid) for sid in validated)
 
     select_clause = ",\n  ".join(_ALLWISE_COLUMNS)
@@ -334,12 +419,16 @@ def build_tmass_for_ids_adql(source_ids: Iterable[int]) -> str:
     validated = _validate_source_ids(source_ids)
     if not validated:
         raise ValueError("source_ids must contain at least one ID")
+    if len(validated) > validation.MAX_NETWORK_SOURCE_CHUNK:
+        raise ValueError("2MASS request exceeds the registered 500-source network chunk")
     id_list = ", ".join(str(sid) for sid in validated)
 
     select_clause = ",\n  ".join(_TMASS_COLUMNS)
     where_clauses = [
         f"tmbn.source_id IN ({id_list})",
         f"tmbn.angular_distance <= {qn['tmass_angular_distance_max_arcsec']}",
+        "tm.ks_m IS NOT NULL",
+        "tm.ks_msigcom IS NOT NULL",
     ]
     where_block = "\n  AND ".join(where_clauses)
     return (
@@ -400,6 +489,12 @@ def _validate_source_ids(source_ids: Iterable[int]) -> list[int]:
         if sid.bit_length() > 64:
             raise ValueError(f"source_id exceeds 64-bit range, got {sid}")
         out.append(sid)
+        if len(out) > validation.MAX_CLI_SOURCE_IDS:
+            raise ValueError(
+                f"source_ids exceeds the {validation.MAX_CLI_SOURCE_IDS}-source CLI bound"
+            )
+    if len(out) != len(set(out)):
+        raise ValueError("duplicate source_ids are forbidden")
     return out
 
 
@@ -424,12 +519,30 @@ def _load_cached_result(cache_path: Path, query_hash: str) -> SourceQueryResult 
 
 def _save_cached_result(cache_path: Path, result: SourceQueryResult) -> None:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
-    result.sources.to_parquet(cache_path, index=False)
     sidecar = cache_path.with_suffix(cache_path.suffix + ".meta")
-    sidecar.write_text(
-        result.query_hash + "\n" + result.query_text + "\n",
-        encoding="utf-8",
+    parquet_fd, parquet_tmp_name = tempfile.mkstemp(
+        prefix=f".{cache_path.name}.", suffix=".tmp", dir=cache_path.parent
     )
+    os.close(parquet_fd)
+    sidecar_fd, sidecar_tmp_name = tempfile.mkstemp(
+        prefix=f".{sidecar.name}.", suffix=".tmp", dir=sidecar.parent
+    )
+    parquet_tmp = Path(parquet_tmp_name)
+    sidecar_tmp = Path(sidecar_tmp_name)
+    try:
+        with os.fdopen(sidecar_fd, "w", encoding="utf-8") as handle:
+            handle.write(result.query_hash + "\n" + result.query_text + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        sidecar_fd = -1
+        result.sources.to_parquet(parquet_tmp, index=False)
+        os.replace(parquet_tmp, cache_path)
+        os.replace(sidecar_tmp, sidecar)
+    finally:
+        if sidecar_fd >= 0:
+            os.close(sidecar_fd)
+        parquet_tmp.unlink(missing_ok=True)
+        sidecar_tmp.unlink(missing_ok=True)
 
 
 _TAP_MAX_RETRIES = 3
@@ -441,33 +554,30 @@ _TAP_POLL_TIMEOUT_SECONDS = 7200  # 2 hours; Gaia's async job timeout
 def _resolve_credentials_path() -> Path | None:
     """Return the first usable credentials path or None.
 
-    Honours the PHAROS_GAIA_CREDENTIALS environment variable as an
-    override. Otherwise checks the default search path. Files that are
-    group- or world-readable are rejected to avoid using a credential
-    that may have leaked into a shared workspace.
+    Public-catalog queries use anonymous least-privilege access by default.
+    Authentication is enabled only by an explicit PHAROS_GAIA_CREDENTIALS
+    path.  Repository-local and non-0600 files fail closed.
     """
     override = os.environ.get("PHAROS_GAIA_CREDENTIALS")
-    candidates: tuple[Path, ...]
-    if override:
-        candidates = (Path(override).expanduser(),)
-    else:
-        candidates = _GAIA_CREDENTIALS_PATHS
+    if not override:
+        return None
+    candidates = (Path(override).expanduser(),)
+    repository_root = Path(__file__).resolve().parents[2]
     for path in candidates:
+        resolved = path.resolve(strict=False)
+        if resolved.is_relative_to(repository_root):
+            raise PermissionError("repository-local credential files are forbidden")
         if not path.exists() or not path.is_file():
             continue
-        mode = path.stat().st_mode
-        if mode & (stat.S_IRWXG | stat.S_IRWXO):
-            logger.warning(
-                "ignoring credentials file %s: must be mode 600 (user-only)",
-                path,
-            )
-            continue
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if mode != 0o600:
+            raise PermissionError("Gaia credentials file must have mode 0600")
         return path
     return None
 
 
 def _maybe_login() -> None:
-    """Attempt Gaia login from a credentials file. No-op on failure.
+    """Attempt Gaia login from a credential file, failing closed on rejection.
 
     Called at most once per process via the ``_login_state`` flag. Errors
     are logged but never raise — the caller is allowed to continue in
@@ -487,10 +597,9 @@ def _maybe_login() -> None:
         from astroquery.gaia import Gaia  # type: ignore[import-untyped]
 
         Gaia.login(credentials_file=str(path), verbose=False)
-    except Exception as exc:  # noqa: BLE001 — log only, never expose creds
-        _login_state = "anonymous"
-        logger.warning("Gaia login raised %s; falling back to anonymous", type(exc).__name__)
-        return
+    except Exception as exc:  # noqa: BLE001 — exception type only; never expose creds
+        _login_state = "unknown"
+        raise RuntimeError(f"Gaia authentication failed ({type(exc).__name__})") from exc
 
     # Astroquery's Gaia.login() may log an error and return normally on
     # 401 — verify the session actually authenticated by inspecting the
@@ -500,11 +609,8 @@ def _maybe_login() -> None:
         _login_state = "authenticated"
         logger.info("Gaia authenticated session active")
     else:
-        _login_state = "anonymous"
-        logger.error(
-            "Gaia.login() returned but session is NOT authenticated "
-            "(server rejected credentials). Falling back to anonymous."
-        )
+        _login_state = "unknown"
+        raise RuntimeError("Gaia authentication failed")
 
 
 def _execute_tap_query(query_text: str) -> pd.DataFrame:
@@ -645,15 +751,15 @@ def fetch_quiet_negative_controls(
     *,
     limit: int | None = 50_000,
     use_cache: bool = True,
+    generating_command: str = "python -m pharos.cli fetch_quiet_negative",
 ) -> SourceQueryResult:
     """Fetch the raw quiet-negative candidate pool.
 
-    Submitted as three short, indexed queries rather than a single
-    5-way JOIN (which times out on the Gaia archive's DR4-transition
-    server). The legacy cache key covers only the first Gaia query;
-    the sidecar records all submitted query text but is not sufficient
-    for conformant release provenance. v0.1.2 must replace this cache
-    contract before the pool can be used for calibration.
+    Submitted as bounded, keyset-paginated TOP-500 joined pages.  The
+    historical unbounded 5-way join timed out; bounded pages were live-
+    probed before adoption and keep each request inside the frozen source
+    limit. The legacy sidecar remains insufficient for conformant release
+    provenance and cannot pass the artifact loader.
 
     This fetch is not by itself a conformant quiet-negative population.
     The magnitude-binned BP/RP-excess cut and SIMBAD-based YSO / AGN /
@@ -662,58 +768,104 @@ def fetch_quiet_negative_controls(
     p-value calibration. The v0.1.0 release did not do so; see the release
     conformance record.
     """
-    gaia_query = build_quiet_negative_gaia_adql(limit=limit)
-    # Legacy cache key covers only the Gaia step. Do not treat this as
-    # conformant multi-query provenance for a release calibration set.
-    if use_cache and cache_path.exists():
-        # Best-effort legacy cache load: compare against the Gaia-step hash.
-        # Downstream query text is recorded but not independently validated.
-        sidecar = cache_path.with_suffix(cache_path.suffix + ".meta")
-        if sidecar.exists():
-            cached_hash = sidecar.read_text(encoding="utf-8").splitlines()[0]
-            if cached_hash == _hash_query(gaia_query):
-                df = pd.read_parquet(cache_path)
-                logger.info("loaded quiet-negative cache (%d rows)", len(df))
-                return SourceQueryResult(
-                    sources=df,
-                    query_text=gaia_query,
-                    query_hash=cached_hash,
-                    n_sources=len(df),
-                )
+    if limit is None or not isinstance(limit, int) or isinstance(limit, bool):
+        raise TypeError("limit must be a positive integer")
+    if limit < 1 or limit > 250_000:
+        raise ValueError("limit must be within [1, 250000]")
 
-    logger.info("step 1/3: gaia_source quiet-negative pool")
-    gaia_df = _execute_tap_query(gaia_query)
-    if len(gaia_df) == 0:
-        raise RuntimeError("Step 1 returned 0 rows — check pre-registered cuts")
+    page_size = validation.MAX_NETWORK_SOURCE_CHUNK
+    cursor = 0
+    gaia_rows = 0
+    joined_parts: list[pd.DataFrame] = []
+    traces: list[QueryTrace] = []
+    query_texts: list[str] = []
+    retrieved_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
-    source_ids = [int(x) for x in gaia_df["gaia_dr3_source_id"].tolist()]
+    raw_manifest = artifacts.raw_manifest_path(cache_path)
+    if use_cache and (cache_path.exists() or raw_manifest.exists()):
+        try:
+            cached, checkpoint = artifacts.load_raw_checkpoint(cache_path)
+        except (FileNotFoundError, TypeError, ValueError) as exc:
+            raise RuntimeError("refusing legacy, incomplete, or invalid raw cache") from exc
+        joined_parts.append(cached)
+        cursor = int(checkpoint["cursor_source_id"])
+        gaia_rows = int(checkpoint["gaia_rows"])
+        traces = [
+            QueryTrace(
+                str(trace["service"]),
+                str(trace["query_sha256"]),
+                int(trace["response_rows"]),
+            )
+            for trace in checkpoint["query_traces"]
+        ]
+        retrieved_at = str(checkpoint["retrieved_at_utc"])
+        logger.info("resuming validated raw checkpoint at %d joined rows", len(cached))
 
-    logger.info("step 2/3: AllWISE photometry for %d ids", len(source_ids))
-    allwise_query = build_allwise_for_ids_adql(source_ids)
-    allwise_df = _execute_tap_query(allwise_query)
+    while sum(len(part) for part in joined_parts) < limit:
+        joined_query = build_quiet_negative_joined_adql(page_size, after_source_id=cursor)
+        page = _execute_tap_query(joined_query)
+        validation.validate_exact_columns(
+            page, validation.JOINED_SOURCE_COLUMNS, context="joined candidate page"
+        )
+        gaia_view = page.loc[:, validation.GAIA_RESPONSE_COLUMNS]
+        validation.validate_gaia_response(gaia_view, requested_rows=page_size)
+        requested_ids = set(gaia_view["gaia_dr3_source_id"].astype(int))
+        validation.validate_allwise_response(
+            page.loc[:, validation.ALLWISE_RESPONSE_COLUMNS], requested_ids=requested_ids
+        )
+        validation.validate_tmass_response(
+            page.loc[:, validation.TMASS_RESPONSE_COLUMNS], requested_ids=requested_ids
+        )
+        query_texts.append(joined_query)
+        traces.append(
+            QueryTrace("Gaia TAP joined", _hash_query(joined_query), len(page))
+        )
+        if page.empty:
+            raise RuntimeError(
+                f"Gaia candidates exhausted before {limit} joined rows were collected"
+            )
+        next_cursor = int(page["gaia_dr3_source_id"].max())
+        if next_cursor <= cursor:
+            raise RuntimeError("Gaia keyset pagination did not advance")
+        cursor = next_cursor
+        gaia_rows += len(page)
+        joined_parts.append(page)
+        logger.info(
+            "quiet-negative candidate progress: %d/%d joined rows (%d Gaia rows)",
+            sum(len(part) for part in joined_parts),
+            limit,
+            gaia_rows,
+        )
+        checkpoint_frame = pd.concat(joined_parts, ignore_index=True)
+        artifacts.write_raw_checkpoint(
+            cache_path=cache_path,
+            frame=checkpoint_frame,
+            query_traces=[
+                {
+                    "service": trace.service,
+                    "query_sha256": trace.query_sha256,
+                    "response_rows": trace.response_rows,
+                }
+                for trace in traces
+            ],
+            gaia_rows=gaia_rows,
+            retrieved_at_utc=retrieved_at,
+            generating_command=generating_command,
+        )
 
-    logger.info("step 3/3: 2MASS photometry for %d ids", len(source_ids))
-    tmass_query = build_tmass_for_ids_adql(source_ids)
-    tmass_df = _execute_tap_query(tmass_query)
-
-    # Inner-merge enforces the pre-reg requirement that all three layers
-    # have valid measurements for every quiet-negative source.
-    merged = gaia_df.merge(allwise_df, on="gaia_dr3_source_id", how="inner").merge(
-        tmass_df, on="gaia_dr3_source_id", how="inner"
-    )
-    logger.info(
-        "split-merge complete: %d sources survived all three layers",
-        len(merged),
-    )
-
-    combined_text = "\n-- NEXT STEP --\n".join([gaia_query, allwise_query, tmass_query])
+    merged = pd.concat(joined_parts, ignore_index=True)
+    if merged["gaia_dr3_source_id"].duplicated().any():
+        raise RuntimeError("duplicate source identifier appeared across Gaia pages")
+    combined_text = "\n-- NEXT REQUEST --\n".join(query_texts)
+    combined_hash = artifacts.sha256_strings([trace.query_sha256 for trace in traces])
     result = SourceQueryResult(
         sources=merged,
         query_text=combined_text,
-        query_hash=_hash_query(gaia_query),  # gaia step is the cache key
+        query_hash=combined_hash,
         n_sources=len(merged),
+        query_traces=tuple(traces),
+        gaia_rows=gaia_rows,
     )
-    _save_cached_result(cache_path, result)
     return result
 
 

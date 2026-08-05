@@ -16,7 +16,7 @@ This repository contains the methodology, scoring code, control populations, and
 |---|---|---|
 | v0.1.0 | IR / Astrometric Confounder Benchmark | Released pilot; post-release conformance gaps documented |
 | v0.1.1 | Global β calibration + X-ray attenuation | Failed registered attempt; did not ship |
-| v0.1.2 | Subtype-aware confounders + X-ray evidence | Pre-registration frozen; implementation pending |
+| v0.1.2 | Subtype-aware confounders + X-ray evidence | Pre-registration frozen; conformant control builder implemented; model fit pending |
 | v0.2 | Time-domain integration (TESS, Kepler, ZTF) | Not started |
 | v0.3 | Radio coverage (Breakthrough Listen, COSMIC) | Not started |
 | v0.4 | Spectral residual integration (HIRES, HARPS, LAMOST) | Not started |
@@ -25,6 +25,19 @@ This repository contains the methodology, scoring code, control populations, and
 v0.1.0 passed its Hephaistos classification, synthetic-injection, and held-out-null FDR checks. A post-release audit also found that it did **not** satisfy every frozen release requirement: the quiet-negative population was smaller than registered, registered exclusions were not fully applied, and several promised derived artifacts were absent. Treat v0.1.0 as a pilot benchmark, not a complete catalog release. See [`docs/release_manifest_v0.1.0.md`](docs/release_manifest_v0.1.0.md) for the exact payload and conformance record.
 
 The failed v0.1.1 attempt is preserved under [`pre_registration/failed_attempts/`](pre_registration/failed_attempts/). Its fitted weights and X-ray attenuation rule are not active. The superseding v0.1.2 rules are frozen in [`pre_registration/v0.1.2_subtype_confounders_and_xray_evidence.md`](pre_registration/v0.1.2_subtype_confounders_and_xray_evidence.md).
+
+### Build the v0.1.2 quiet-negative fixture
+
+The first v0.1.2 implementation slice builds the registered control population only; it does not fit or activate a model:
+
+```bash
+python -m pharos.cli -v build_quiet_negative_v012 \
+  --output-dir controls/quiet_negative_v0.1.2 \
+  --raw-cache controls/cache/quiet_negative_v0.1.2.raw.parquet \
+  --minimum-joined 55000
+```
+
+Remote requests are capped at 500 source positions. Responses must match exact schemas and pass coordinate, identifier, numeric-bound, and duplicate checks before use. The builder applies the magnitude-binned BP/RP excess-factor cut and 30-arcsecond SIMBAD YSO/AGN and Chen debris-disk exclusions. Acquisition checkpoints are atomic, hash-validated local working state. A final fixture is published only when at least 50,000 controls survive, and calibration/FDR commands refuse legacy parquet files without the exact v0.1.2 manifest.
 
 ## Repository Layout
 

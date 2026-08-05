@@ -60,13 +60,13 @@ class TestBuildQuietNegativeSplitQueries:
     """The split-query path that's actually submitted to the Gaia archive."""
 
     def test_gaia_step_includes_gaia_source(self) -> None:
-        query = sources.build_quiet_negative_gaia_adql(limit=1000)
+        query = sources.build_quiet_negative_gaia_adql(limit=500)
         assert sources.GAIA_SOURCE_TABLE in query
         assert sources.ALLWISE_XMATCH_TABLE not in query
         assert sources.TMASS_XMATCH_TABLE not in query
 
     def test_gaia_step_includes_pre_registered_cuts(self) -> None:
-        query = sources.build_quiet_negative_gaia_adql(limit=1000)
+        query = sources.build_quiet_negative_gaia_adql(limit=500)
         cov = sources.COVERAGE_CLASS_CUTS
         qn = sources.QUIET_NEGATIVE_CUTS
         assert f"parallax_over_error >= {cov['parallax_over_error_min']}" in query
@@ -77,7 +77,7 @@ class TestBuildQuietNegativeSplitQueries:
     def test_gaia_step_uses_indexed_distance_predicate(self) -> None:
         # The computed-distance form (`1000.0 / parallax`) is dramatically
         # slower server-side than the equivalent indexed parallax-bound.
-        query = sources.build_quiet_negative_gaia_adql(limit=1000)
+        query = sources.build_quiet_negative_gaia_adql(limit=500)
         assert "1000.0 / parallax" not in query
         assert "parallax >= 5.000000" in query
 
@@ -103,17 +103,41 @@ class TestBuildQuietNegativeSplitQueries:
             sources.build_allwise_for_ids_adql(["12345"])  # type: ignore[list-item]
 
     def test_gaia_step_limit_is_inlined(self) -> None:
-        query = sources.build_quiet_negative_gaia_adql(limit=2500)
-        assert "TOP 2500" in query
+        query = sources.build_quiet_negative_gaia_adql(limit=500)
+        assert "TOP 500" in query
 
-    def test_gaia_step_unlimited_omits_top(self) -> None:
-        query = sources.build_quiet_negative_gaia_adql(limit=None)
-        assert "TOP" not in query
+    def test_gaia_step_rejects_unbounded_or_oversized_request(self) -> None:
+        with pytest.raises(TypeError):
+            sources.build_quiet_negative_gaia_adql(limit=None)  # type: ignore[arg-type]
+        with pytest.raises(ValueError):
+            sources.build_quiet_negative_gaia_adql(limit=501)
+
+    def test_gaia_step_keyset_cursor_is_inlined(self) -> None:
+        query = sources.build_quiet_negative_gaia_adql(limit=500, after_source_id=123)
+        assert "source_id > 123" in query
+        assert "ORDER BY source_id" in query
 
     def test_gaia_step_hash_is_stable(self) -> None:
-        q1 = sources.build_quiet_negative_gaia_adql(limit=1000)
-        q2 = sources.build_quiet_negative_gaia_adql(limit=1000)
+        q1 = sources.build_quiet_negative_gaia_adql(limit=500)
+        q2 = sources.build_quiet_negative_gaia_adql(limit=500)
         assert q1 == q2
         assert hashlib.sha256(q1.encode("utf-8")).hexdigest() == hashlib.sha256(
             q2.encode("utf-8")
         ).hexdigest()
+
+
+class TestBuildQuietNegativeJoinedPages:
+    def test_joined_page_projects_all_registered_columns_and_cuts(self) -> None:
+        query = sources.build_quiet_negative_joined_adql(500, after_source_id=123)
+        assert sources.GAIA_SOURCE_TABLE in query
+        assert sources.ALLWISE_XMATCH_TABLE in query
+        assert sources.TMASS_XMATCH_TABLE in query
+        assert "TOP 500" in query
+        assert "gs.source_id > 123" in query
+        assert "ORDER BY gs.source_id" in query
+        assert "awbn.number_of_neighbours = 1" in query
+        assert "tm.ks_m IS NOT NULL" in query
+
+    def test_joined_page_rejects_oversized_request(self) -> None:
+        with pytest.raises(ValueError):
+            sources.build_quiet_negative_joined_adql(501)

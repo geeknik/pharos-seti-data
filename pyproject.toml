@@ -37,6 +37,7 @@ dev = [
     "pytest-cov==7.1.0",
     "ruff==0.15.12",
     "mypy==2.0.0",
+    "pip-audit==2.9.0",
 ]
 
 [project.urls]
@@ -69,6 +70,7 @@ module = [
     "numpy",
     "numpy.*",
     "pandas",
+    "pandas.*",
     "yaml",
 ]
 ignore_missing_imports = true

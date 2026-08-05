@@ -53,7 +53,7 @@ ff35549f2ebbb5befd48e07248918fc608992dae54529adc118371249afa0202  pre_registrati
 | Date frozen | 2026-05-12 |
 | Status | FROZEN |
 | Supersedes | v0.1 §5 (confounder vector) only |
-| Superseded by | (none) |
+| Superseded by | v0.1.2 |
 
 ### Freeze record
 
@@ -71,4 +71,34 @@ Expected output:
 
 ```
 d9ad5d0fecbed29a77cbecc78a9bf238ef500dbc40fba342f4b52de5c9e95a89  pre_registration/v0.1.1_calibrated_betas_and_xray_hot_dog.md
+```
+
+---
+
+## v0.1.2 — Subtype-Aware Confounders + X-ray Evidence
+
+| Field | Value |
+|---|---|
+| Document | [`v0.1.2_subtype_confounders_and_xray_evidence.md`](v0.1.2_subtype_confounders_and_xray_evidence.md) |
+| Date frozen | 2026-08-05 |
+| Status | FROZEN |
+| Supersedes | v0.1.1 in full; v0.1 remains the base release |
+| Superseded by | (none) |
+
+### Freeze record
+
+| Stage | Date | File size | SHA-256 |
+|---|---|---:|---|
+| Initial freeze | 2026-08-05 | 19,123 bytes | `68e4f2d3359a5c4f208426d80a56f58788bdea6003e07ae0a75dc68cbcc259eb` |
+
+### Verification command
+
+```sh
+shasum -a 256 pre_registration/v0.1.2_subtype_confounders_and_xray_evidence.md
+```
+
+Expected output:
+
+```text
+68e4f2d3359a5c4f208426d80a56f58788bdea6003e07ae0a75dc68cbcc259eb  pre_registration/v0.1.2_subtype_confounders_and_xray_evidence.md
 ```

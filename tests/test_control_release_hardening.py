@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -11,6 +13,46 @@ import yaml
 
 from pharos import artifacts, control_population, sources, validation
 from tests.test_control_population import _joined_sources, _valid_manifest
+
+
+def test_software_provenance_refuses_dirty_tracked_and_untracked_inputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "repo"
+    package = root / "src" / "pharos"
+    package.mkdir(parents=True)
+    (package / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text("[project]\nname='test'\n", encoding="utf-8")
+    (root / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.email", "tests@example.invalid"], cwd=root, check=True)
+    subprocess.run(["git", "config", "user.name", "Tests"], cwd=root, check=True)
+    subprocess.run(["git", "add", "src/pharos", "pyproject.toml", "uv.lock"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "fixture"], cwd=root, check=True)
+    monkeypatch.setattr(artifacts, "repository_root", lambda: root)
+
+    clean = artifacts.software_provenance()
+    assert len(clean["git_commit"]) == 40
+
+    (package / "module.py").write_text("VALUE = 2\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="dirty"):
+        artifacts.software_provenance()
+    (package / "module.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (package / "untracked.py").write_text("PAYLOAD = True\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="dirty"):
+        artifacts.software_provenance()
+
+    def forbid_acquisition(*args: object, **kwargs: object) -> None:
+        raise AssertionError("dirty publication attempted remote acquisition")
+
+    monkeypatch.setattr(sources, "fetch_quiet_negative_controls", forbid_acquisition)
+    with pytest.raises(RuntimeError, match="dirty"):
+        control_population.build_quiet_negative_v012(
+            output_dir=root / "release",
+            raw_cache_path=root / "raw.parquet",
+            minimum_joined_rows=1,
+            generating_command="python -m pharos.cli build_quiet_negative_v012",
+        )
 
 
 def test_sampling_plan_is_deterministic_all_sky_and_exact_quota() -> None:
@@ -306,6 +348,64 @@ def test_loader_recomputes_bp_rp_medians_from_bound_parent_population(
         artifacts.load_control_artifact(manifest_path)
 
 
+def test_release_manifest_separately_binds_historical_raw_and_release_producers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    release_producer = dict(payload["software"])
+    historical = {
+        "git_commit": "4" * 40,
+        "source_tree_sha256": "5" * 64,
+        "uv_lock_sha256": "6" * 64,
+    }
+    payload["raw_input_provenance"]["producer_software"] = historical
+    trusted = artifacts.TrustedRawCheckpoint(
+        git_commit=historical["git_commit"],
+        source_tree_sha256=historical["source_tree_sha256"],
+        uv_lock_sha256=historical["uv_lock_sha256"],
+        artifact_sha256=payload["raw_input_provenance"]["artifact_sha256"],
+        manifest_sha256=payload["raw_input_provenance"]["checkpoint_manifest_sha256"],
+        content_sha256=payload["raw_input_provenance"]["content_sha256"],
+    )
+    monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", (trusted,))
+
+    validated = artifacts.validate_control_manifest(payload)
+
+    assert dict(validated["software"]) == release_producer
+    assert dict(validated["raw_input_provenance"]["producer_software"]) != release_producer
+    assert (
+        validated["raw_input_provenance"]["artifact_sha256"]
+        == payload["raw_input_provenance"]["artifact_sha256"]
+    )
+
+    forged = copy.deepcopy(payload)
+    forged["raw_input_provenance"]["producer_software"]["git_commit"] = "0" * 40
+    with pytest.raises(ValueError, match="raw input provenance"):
+        artifacts.validate_control_manifest(forged)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "artifact_sha256",
+        "checkpoint_manifest_sha256",
+        "content_sha256",
+        "released_artifact_sha256",
+    ],
+)
+def test_release_manifest_rejects_arbitrary_raw_provenance_hashes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    payload["raw_input_provenance"][field] = "7" * 64
+    with pytest.raises(ValueError, match="raw input provenance"):
+        artifacts.validate_control_manifest(payload)
+
+
 def test_exact_exclusion_dedup_then_residual_duplicate_rejection() -> None:
     row = {
         "gaia_dr3_source_id": 1,
@@ -321,6 +421,70 @@ def test_exact_exclusion_dedup_then_residual_duplicate_rejection() -> None:
         validation.validate_exclusions(duplicated)
     normalized = control_population.normalize_exclusions(duplicated)
     assert len(normalized) == 1
+
+
+def test_exclusion_normalization_preserves_conflicting_identity_and_is_deterministic() -> None:
+    base = {
+        "gaia_dr3_source_id": 7,
+        "exclusion_catalog": "SIMBAD",
+        "exclusion_class": "AGN",
+        "matched_object_id": "AGN-7",
+        "matched_otype": "AGN",
+        "angular_distance_arcsec": 2.0,
+        "catalog_release": "SIMBAD live database",
+    }
+    conflict = {**base, "matched_otype": "QSO"}
+    other = {**base, "gaia_dr3_source_id": 3, "matched_object_id": "AGN-3"}
+    first = pd.DataFrame([conflict, other, base, base], columns=validation.EXCLUSION_COLUMNS)
+    second = first.iloc[[3, 1, 0, 2]].reset_index(drop=True)
+
+    normalized_first = control_population.normalize_exclusions(first)
+    normalized_second = control_population.normalize_exclusions(second)
+
+    pd.testing.assert_frame_equal(normalized_first, normalized_second)
+    assert len(normalized_first) == 3
+    assert normalized_first.loc[
+        normalized_first["gaia_dr3_source_id"] == 7, "matched_otype"
+    ].tolist() == ["AGN", "QSO"]
+
+
+def test_simbad_live_duplicate_shape_preserves_response_provenance_and_membership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from astropy.table import Table
+    from astroquery.simbad import Simbad
+
+    response = pd.DataFrame(
+        [
+            (2, "YSO-2", "Y*O", 3.0),
+            (1, "AGN-1", "AGN", 1.0),
+            (1, "AGN-1", "AGN", 1.0),
+            (1, "AGN-1", "QSO", 1.0),
+        ],
+        columns=validation.SIMBAD_RESPONSE_COLUMNS,
+    )
+    response["gaia_dr3_source_id"] = response["gaia_dr3_source_id"].astype("int64")
+
+    def fake_query_tap(*args: object, **kwargs: object) -> Table:
+        return Table.from_pandas(response)
+
+    monkeypatch.setattr(Simbad, "query_tap", fake_query_tap)
+    candidates = _joined_sources(3).loc[:, ["gaia_dr3_source_id", "ra", "dec"]]
+
+    exclusions, traces = control_population.fetch_simbad_exclusions(candidates)
+
+    assert len(traces) == 1
+    assert traces[0].response_rows == 4
+    assert traces[0].response_sha256 == artifacts.sha256_frame(response)
+    assert len(exclusions) == 3
+    assert exclusions["gaia_dr3_source_id"].tolist() == [1, 1, 2]
+    assert exclusions.loc[exclusions["gaia_dr3_source_id"] == 1, "matched_otype"].tolist() == [
+        "AGN",
+        "QSO",
+    ]
+
+    remaining = control_population.apply_external_exclusions(_joined_sources(3), exclusions)
+    assert remaining["gaia_dr3_source_id"].tolist() == [3]
 
 
 def test_exclusion_materialization_bound_precedes_deduplication(
@@ -427,7 +591,7 @@ def test_yaml_size_and_aliases_fail_before_safe_load(
     oversized.write_text("x" * 32, encoding="utf-8")
     monkeypatch.setattr(artifacts, "MAX_YAML_BYTES", 8)
     with pytest.raises(ValueError, match="byte bound"):
-        artifacts._read_bounded_yaml(oversized, root=tmp_path)  # noqa: SLF001
+        artifacts._read_bounded_yaml_with_sha256(oversized, root=tmp_path)  # noqa: SLF001
 
     monkeypatch.setattr(artifacts, "MAX_YAML_BYTES", 1024)
     aliases = tmp_path / "aliases.yaml"
@@ -456,7 +620,18 @@ def test_yaml_symlink_swap_is_refused_at_single_descriptor_open(
 
     monkeypatch.setattr(artifacts.os, "open", swap_then_open)
     with pytest.raises(ValueError, match="without following symlinks"):
-        artifacts._read_bounded_yaml(manifest, root=tmp_path)  # noqa: SLF001
+        artifacts._read_bounded_yaml_with_sha256(manifest, root=tmp_path)  # noqa: SLF001
+
+
+def test_bounded_yaml_hash_covers_exact_parsed_descriptor_bytes(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.yaml"
+    raw = b"status: validated\n"
+    manifest.write_bytes(raw)
+    payload, digest = artifacts._read_bounded_yaml_with_sha256(  # noqa: SLF001
+        manifest, root=tmp_path
+    )
+    assert payload == {"status": "validated"}
+    assert digest == hashlib.sha256(raw).hexdigest()
 
 
 def test_verified_parquet_accepts_symlinked_ancestor_alias(tmp_path: Path) -> None:

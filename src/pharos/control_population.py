@@ -180,8 +180,12 @@ def fetch_simbad_exclusions(candidates: pd.DataFrame) -> tuple[pd.DataFrame, lis
     )
     out["catalog_release"] = "SIMBAD live database"
     out = out.loc[:, validation.EXCLUSION_COLUMNS]
-    validation.validate_exclusions(out)
-    return out, traces
+    # SIMBAD can return byte-identical rows from its relation joins.  The
+    # remote response has already passed its stricter schema/domain and
+    # per-request materialization bounds above.  Normalize only after mapping
+    # to the frozen exclusion schema so provenance continues to record the
+    # unmodified response row count and digest.
+    return normalize_exclusions(out), traces
 
 
 def _validate_chen_catalog(frame: pd.DataFrame) -> None:
@@ -281,13 +285,23 @@ def apply_external_exclusions(
 
 
 def normalize_exclusions(exclusions: pd.DataFrame) -> pd.DataFrame:
-    """Remove byte-for-byte duplicate rows, then reject ambiguous residual duplicates."""
+    """Remove exact full-tuple duplicates and return a deterministic artifact.
+
+    Rows that share an object identity but disagree in any exclusion field are
+    deliberately retained.  They represent distinct catalog evidence and must
+    remain visible to the frozen retained-match bound and downstream review.
+    """
     validation.validate_exact_columns(
         exclusions, validation.EXCLUSION_COLUMNS, context="unnormalized external exclusions"
     )
     if len(exclusions) > validation.MAX_EXCLUSION_ROWS:
         raise ValueError("unnormalized external exclusions exceed the materialization bound")
-    normalized = exclusions.drop_duplicates(ignore_index=True)
+    normalized = exclusions.drop_duplicates(
+        subset=list(validation.EXCLUSION_COLUMNS), ignore_index=True
+    )
+    normalized = normalized.sort_values(
+        list(validation.EXCLUSION_COLUMNS), kind="mergesort", ignore_index=True
+    )
     validation.validate_exclusions(normalized)
     return normalized
 
@@ -301,6 +315,10 @@ def build_quiet_negative_v012(
     use_raw_cache: bool = True,
 ) -> ControlBuildResult:
     """Build, filter, atomically publish, and reload-validate the fixture."""
+    # Fail before any remote call when the release producer cannot be bound to
+    # a clean tracked source/config/lock state.  Manifest construction repeats
+    # this check immediately before publication to catch mid-run changes.
+    artifacts.software_provenance()
     output_dir = artifacts.validate_repository_path(output_dir, label="output_dir")
     raw_cache_path = artifacts.validate_repository_path(raw_cache_path, label="raw_cache_path")
     if output_dir.exists() or output_dir.is_symlink():
@@ -312,6 +330,8 @@ def build_quiet_negative_v012(
         use_cache=use_raw_cache,
         generating_command=generating_command,
     )
+    if raw_result.raw_input_provenance is None:
+        raise RuntimeError("quiet-negative raw input provenance is missing")
     bp_rp = apply_bp_rp_excess_cut(raw_result.sources)
     simbad, simbad_traces = fetch_simbad_exclusions(bp_rp)
     chen, chen_traces = fetch_chen_exclusions(bp_rp)
@@ -389,6 +409,7 @@ def build_quiet_negative_v012(
             },
             selection_target_rows=raw_result.selection_target_rows,
             selection_strata=[dict(item) for item in raw_result.selection_strata],
+            raw_input_provenance=dict(raw_result.raw_input_provenance),
         )
         artifacts.validate_control_manifest(manifest)
         artifacts.write_exclusive_yaml(manifest, manifest_path)

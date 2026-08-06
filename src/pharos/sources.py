@@ -158,6 +158,7 @@ class SourceQueryResult:
     gaia_rows: int = 0
     selection_target_rows: int = 0
     selection_strata: tuple[dict[str, object], ...] = ()
+    raw_input_provenance: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -953,10 +954,20 @@ def fetch_quiet_negative_controls(
         raise RuntimeError("duplicate source identifier appeared across Gaia pages")
     if len(merged) != limit:
         raise RuntimeError("sky-stratified acquisition did not produce exact target size")
+    # Re-open the completed checkpoint through the full hash/schema/provenance
+    # boundary.  This makes a historical, explicitly approved raw producer a
+    # first-class input to the new release rather than falsely attributing its
+    # acquisition bytes to the downstream release code.
+    checkpoint_sources, checkpoint, checkpoint_manifest_sha256 = (
+        artifacts.load_raw_checkpoint_record(cache_path)
+    )
+    if not checkpoint_sources.equals(merged):
+        raise RuntimeError("validated raw checkpoint differs from acquired source rows")
+
     combined_text = "\n-- NEXT REQUEST --\n".join(query_texts)
     combined_hash = artifacts.sha256_strings([trace.query_sha256 for trace in traces])
     result = SourceQueryResult(
-        sources=merged,
+        sources=checkpoint_sources,
         query_text=combined_text,
         query_hash=combined_hash,
         n_sources=len(merged),
@@ -964,6 +975,12 @@ def fetch_quiet_negative_controls(
         gaia_rows=gaia_rows,
         selection_target_rows=limit,
         selection_strata=tuple(asdict(item) for item in strata),
+        raw_input_provenance={
+            "artifact_sha256": str(checkpoint["artifact"]["sha256"]),
+            "checkpoint_manifest_sha256": checkpoint_manifest_sha256,
+            "producer_software": dict(checkpoint["software"]),
+            "content_sha256": artifacts.sha256_frame(checkpoint_sources),
+        },
     )
     return result
 

@@ -10,8 +10,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 
 from pharos import artifacts, cli, control_population, sources, validation
+
+TEST_SOFTWARE = {
+    "git_commit": "1" * 40,
+    "source_tree_sha256": "2" * 64,
+    "uv_lock_sha256": "3" * 64,
+}
 
 
 def _joined_sources(n_rows: int = 3) -> pd.DataFrame:
@@ -83,6 +90,7 @@ def _valid_manifest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, Path]:
     monkeypatch.setattr(artifacts, "MIN_CONTROL_ROWS", 2)
+    monkeypatch.setattr(artifacts, "software_provenance", lambda: dict(TEST_SOFTWARE))
     joined = _joined_sources(2)
     joined["galactic_l"] = [1.0, 1.0]
     joined["galactic_b"] = [30.0, -30.0]
@@ -106,6 +114,26 @@ def _valid_manifest(
         if item["quota"]:
             cursor += item["quota"]
             item["cursor_source_id"] = cursor
+    raw_input_provenance = {
+        "artifact_sha256": artifacts.sha256_file(raw_candidates_path),
+        "checkpoint_manifest_sha256": query_hash,
+        "producer_software": dict(TEST_SOFTWARE),
+        "content_sha256": artifacts.sha256_frame(joined),
+    }
+    monkeypatch.setattr(
+        artifacts,
+        "TRUSTED_RAW_CHECKPOINTS",
+        (
+            artifacts.TrustedRawCheckpoint(
+                git_commit=TEST_SOFTWARE["git_commit"],
+                source_tree_sha256=TEST_SOFTWARE["source_tree_sha256"],
+                uv_lock_sha256=TEST_SOFTWARE["uv_lock_sha256"],
+                artifact_sha256=raw_input_provenance["artifact_sha256"],
+                manifest_sha256=raw_input_provenance["checkpoint_manifest_sha256"],
+                content_sha256=raw_input_provenance["content_sha256"],
+            ),
+        ),
+    )
     manifest = artifacts.build_control_manifest(
         raw_candidates_path=raw_candidates_path,
         raw_candidates=joined,
@@ -158,6 +186,7 @@ def _valid_manifest(
         },
         selection_target_rows=2,
         selection_strata=strata,
+        raw_input_provenance=raw_input_provenance,
     )
     artifacts.atomic_write_yaml(manifest, manifest_path)
     return manifest_path, controls_path
@@ -265,8 +294,6 @@ def test_manifest_rejects_unknown_field_and_wrong_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
-    import yaml
-
     payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     extra = copy.deepcopy(payload)
     extra["surprise"] = True
@@ -310,7 +337,10 @@ def test_legacy_parquet_without_manifest_is_refused(tmp_path: Path) -> None:
         artifacts.load_control_artifact(tmp_path / "manifest.yaml")
 
 
-def test_raw_checkpoint_round_trip_and_legacy_refusal(tmp_path: Path) -> None:
+def test_raw_checkpoint_round_trip_and_legacy_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(artifacts, "software_provenance", lambda: dict(TEST_SOFTWARE))
     raw = _joined_sources(2)
     raw["galactic_l"] = [1.0, 1.0]
     raw["galactic_b"] = [30.0, -30.0]
@@ -366,6 +396,201 @@ def test_raw_checkpoint_round_trip_and_legacy_refusal(tmp_path: Path) -> None:
     manifest_path.unlink()
     with pytest.raises(RuntimeError, match="legacy, incomplete, or invalid"):
         sources.fetch_quiet_negative_controls(cache, limit=2, use_cache=True)
+
+
+def test_approved_historical_raw_producer_is_reusable_and_remains_attributed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = _joined_sources(2)
+    raw["galactic_l"] = [1.0, 1.0]
+    raw["galactic_b"] = [30.0, -30.0]
+    cache = tmp_path / "raw.parquet"
+    query_hash = hashlib.sha256(b"joined query").hexdigest()
+    strata = [asdict(item) for item in sources.build_sampling_strata(2)]
+    cursor = 0
+    for item in strata:
+        item["collected_rows"] = item["quota"]
+        if item["quota"]:
+            cursor += item["quota"]
+            item["cursor_source_id"] = cursor
+
+    historical = {
+        "git_commit": "4" * 40,
+        "source_tree_sha256": "5" * 64,
+        "uv_lock_sha256": "6" * 64,
+    }
+    monkeypatch.setattr(artifacts, "software_provenance", lambda: historical)
+    manifest_path = artifacts.write_raw_checkpoint(
+        cache_path=cache,
+        frame=raw,
+        query_traces=[
+            {
+                "service": "Gaia TAP joined",
+                "endpoint": artifacts.GAIA_ENDPOINT,
+                "query_sha256": query_hash,
+                "input_sha256": query_hash,
+                "response_sha256": artifacts.sha256_frame(raw),
+                "response_rows": 2,
+                "requested_at_utc": "2026-08-05T19:59:00Z",
+                "received_at_utc": "2026-08-05T20:00:00Z",
+            }
+        ],
+        gaia_rows=2,
+        retrieved_at_utc="2026-08-05T20:00:00Z",
+        generating_command="python -m pharos.cli build_quiet_negative_v012",
+        selection_target_rows=2,
+        selection_strata=strata,
+    )
+    trusted = artifacts.TrustedRawCheckpoint(
+        git_commit=historical["git_commit"],
+        source_tree_sha256=historical["source_tree_sha256"],
+        uv_lock_sha256=historical["uv_lock_sha256"],
+        artifact_sha256=artifacts.sha256_file(cache),
+        manifest_sha256=artifacts.sha256_file(manifest_path),
+        content_sha256=artifacts.sha256_frame(raw),
+    )
+    monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", (trusted,))
+    release_producer = {
+        "git_commit": "1" * 40,
+        "source_tree_sha256": "2" * 64,
+        "uv_lock_sha256": historical["uv_lock_sha256"],
+    }
+    monkeypatch.setattr(artifacts, "software_provenance", lambda: release_producer)
+
+    loaded, manifest = artifacts.load_raw_checkpoint(cache)
+
+    pd.testing.assert_frame_equal(loaded, raw)
+    assert dict(manifest["software"]) == historical
+    assert artifacts.sha256_file(cache) == manifest["artifact"]["sha256"]
+    assert artifacts.sha256_file(manifest_path) != manifest["artifact"]["sha256"]
+
+    def forbid_network(_: str) -> pd.DataFrame:
+        raise AssertionError("completed historical checkpoint must not reacquire Gaia rows")
+
+    monkeypatch.setattr(sources, "_execute_tap_query", forbid_network)
+    resumed = sources.fetch_quiet_negative_controls(cache, limit=2, use_cache=True)
+    pd.testing.assert_frame_equal(resumed.sources, raw)
+    assert resumed.raw_input_provenance == {
+        "artifact_sha256": manifest["artifact"]["sha256"],
+        "checkpoint_manifest_sha256": artifacts.sha256_file(manifest_path),
+        "producer_software": historical,
+        "content_sha256": artifacts.sha256_frame(raw),
+    }
+
+
+def test_registered_live_checkpoint_identity_is_exact() -> None:
+    trusted = artifacts.TRUSTED_RAW_CHECKPOINTS[0]
+    assert trusted.producer_software == {
+        "git_commit": "a0e99b7d1e0300d153d164398239cae22663e69d",
+        "source_tree_sha256": "186db27ebe7aa3a2ac419ede19c1c244d66fd4f0d68325b3422edf40524bba46",
+        "uv_lock_sha256": "a5947dc7f96f67447ab0a2d5d412b22aa4f3ff65765819518a359dcb731bf731",
+    }
+    assert trusted.artifact_sha256 == (
+        "841bc68c0e22218070caf77bb7454ee72fc3c66a1b71f5465525d779c0b7f840"
+    )
+    assert trusted.manifest_sha256 == (
+        "ba129cce109db2e49cc5a00424d4c4e7dbaa878ede149d9c5eee0ed4a25e8fd6"
+    )
+    assert trusted.content_sha256 == (
+        "789754d255060f2e4e37b60b9c1e89d9551ed75bebaf1f9c7f64d80d989fb8e8"
+    )
+
+
+@pytest.mark.parametrize(("column", "value"), [("pmra", 123.0), ("ra", 42.0)])
+def test_historical_producer_cannot_self_sign_altered_checkpoint_rows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    column: str,
+    value: float,
+) -> None:
+    raw = _joined_sources(2)
+    raw["galactic_l"] = [1.0, 1.0]
+    raw["galactic_b"] = [30.0, -30.0]
+    cache = tmp_path / "raw.parquet"
+    query_hash = hashlib.sha256(b"joined query").hexdigest()
+    strata = [asdict(item) for item in sources.build_sampling_strata(2)]
+    for item in strata:
+        item["collected_rows"] = item["quota"]
+        if item["quota"]:
+            item["cursor_source_id"] = int(
+                raw.loc[
+                    (raw["galactic_l"] >= item["longitude_min_deg"])
+                    & (raw["galactic_l"] < item["longitude_max_deg"])
+                    & (
+                        (raw["galactic_b"] > 20.0)
+                        if item["hemisphere"] == "north"
+                        else (raw["galactic_b"] < -20.0)
+                    ),
+                    "gaia_dr3_source_id",
+                ].max()
+            )
+    historical = {
+        "git_commit": "4" * 40,
+        "source_tree_sha256": "5" * 64,
+        "uv_lock_sha256": "6" * 64,
+    }
+    monkeypatch.setattr(artifacts, "software_provenance", lambda: historical)
+    manifest_path = artifacts.write_raw_checkpoint(
+        cache_path=cache,
+        frame=raw,
+        query_traces=[
+            {
+                "service": "Gaia TAP joined",
+                "endpoint": artifacts.GAIA_ENDPOINT,
+                "query_sha256": query_hash,
+                "input_sha256": query_hash,
+                "response_sha256": artifacts.sha256_frame(raw),
+                "response_rows": 2,
+                "requested_at_utc": "2026-08-05T19:59:00Z",
+                "received_at_utc": "2026-08-05T20:00:00Z",
+            }
+        ],
+        gaia_rows=2,
+        retrieved_at_utc="2026-08-05T20:00:00Z",
+        generating_command="python -m pharos.cli build_quiet_negative_v012",
+        selection_target_rows=2,
+        selection_strata=strata,
+    )
+    trusted = artifacts.TrustedRawCheckpoint(
+        git_commit=historical["git_commit"],
+        source_tree_sha256=historical["source_tree_sha256"],
+        uv_lock_sha256=historical["uv_lock_sha256"],
+        artifact_sha256=artifacts.sha256_file(cache),
+        manifest_sha256=artifacts.sha256_file(manifest_path),
+        content_sha256=artifacts.sha256_frame(raw),
+    )
+    monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", (trusted,))
+
+    altered = raw.copy()
+    altered.loc[0, column] = value
+    altered.to_parquet(cache, index=False)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    payload["artifact"]["sha256"] = artifacts.sha256_file(cache)
+    payload["query_traces"][0]["response_sha256"] = artifacts.sha256_frame(altered)
+    artifacts.atomic_write_yaml(payload, manifest_path)
+    monkeypatch.setattr(artifacts, "software_provenance", lambda: dict(TEST_SOFTWARE))
+
+    with pytest.raises(ValueError, match="approved checkpoint"):
+        artifacts.load_raw_checkpoint(cache)
+
+
+def test_all_zero_query_and_input_hashes_are_rejected() -> None:
+    query_hash = hashlib.sha256(b"joined query").hexdigest()
+    trace = {
+        "service": "Gaia TAP joined",
+        "endpoint": artifacts.GAIA_ENDPOINT,
+        "query_sha256": query_hash,
+        "input_sha256": query_hash,
+        "response_sha256": query_hash,
+        "response_rows": 1,
+        "requested_at_utc": "2026-08-05T19:59:00Z",
+        "received_at_utc": "2026-08-05T20:00:00Z",
+    }
+    for field in ("query_sha256", "input_sha256"):
+        forged = dict(trace)
+        forged[field] = "0" * 64
+        with pytest.raises(ValueError, match="all-zero"):
+            artifacts._validate_trace(forged, context="test trace")  # noqa: SLF001
 
 
 def test_simbad_query_is_fixed_and_upload_bound() -> None:

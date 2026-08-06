@@ -10,6 +10,7 @@ import stat
 import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ import yaml
 from pharos import validation
 
 CONTROL_SCHEMA_VERSION = "pharos.quiet-negative.v0.1.2"
-MANIFEST_SCHEMA_VERSION = "pharos.quiet-negative-manifest.v2"
+MANIFEST_SCHEMA_VERSION = "pharos.quiet-negative-manifest.v3"
 RAW_SCHEMA_VERSION = "pharos.quiet-negative-raw.v0.1.2"
 RAW_MANIFEST_SCHEMA_VERSION = "pharos.quiet-negative-raw-manifest.v2"
 VALID_STATUS = "validated"
@@ -41,6 +42,40 @@ SERVICE_ENDPOINTS = {
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+
+@dataclass(frozen=True)
+class TrustedRawCheckpoint:
+    """Exact identity of one reviewed historical acquisition checkpoint."""
+
+    git_commit: str
+    source_tree_sha256: str
+    uv_lock_sha256: str
+    artifact_sha256: str
+    manifest_sha256: str
+    content_sha256: str
+
+    @property
+    def producer_software(self) -> dict[str, str]:
+        return {
+            "git_commit": self.git_commit,
+            "source_tree_sha256": self.source_tree_sha256,
+            "uv_lock_sha256": self.uv_lock_sha256,
+        }
+
+
+# This is a checkpoint allow-list, not a producer allow-list.  A cache that
+# merely claims the same producer is rejected unless both immutable byte
+# digests also match this reviewed 55,000-row acquisition.
+TRUSTED_RAW_CHECKPOINTS: tuple[TrustedRawCheckpoint, ...] = (
+    TrustedRawCheckpoint(
+        git_commit="a0e99b7d1e0300d153d164398239cae22663e69d",
+        source_tree_sha256="186db27ebe7aa3a2ac419ede19c1c244d66fd4f0d68325b3422edf40524bba46",
+        uv_lock_sha256="a5947dc7f96f67447ab0a2d5d412b22aa4f3ff65765819518a359dcb731bf731",
+        artifact_sha256="841bc68c0e22218070caf77bb7454ee72fc3c66a1b71f5465525d779c0b7f840",
+        manifest_sha256="ba129cce109db2e49cc5a00424d4c4e7dbaa878ede149d9c5eee0ed4a25e8fd6",
+        content_sha256="789754d255060f2e4e37b60b9c1e89d9551ed75bebaf1f9c7f64d80d989fb8e8",
+    ),
+)
 
 
 def sha256_file(path: Path) -> str:
@@ -99,6 +134,25 @@ def software_provenance() -> dict[str, str]:
     lock = root / "uv.lock"
     if not lock.is_file() or lock.is_symlink():
         raise RuntimeError("trusted uv.lock is missing or is a symlink")
+    dirty = subprocess.run(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--",
+            "src/pharos",
+            "pyproject.toml",
+            "uv.lock",
+        ],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if dirty.stdout:
+        raise RuntimeError("refusing software provenance from a dirty source/config/lock tree")
     completed = subprocess.run(
         [
             "git",
@@ -316,7 +370,8 @@ def _normalize_contained_reference(path: Path, *, root: Path) -> Path:
     return _safe_contained_path(root, relative.as_posix(), must_exist=True)
 
 
-def _read_bounded_yaml(path: Path, *, root: Path) -> Any:
+def _read_bounded_yaml_with_sha256(path: Path, *, root: Path) -> tuple[Any, str]:
+    """Read and hash one bounded YAML inode through one no-follow descriptor."""
     safe = _normalize_contained_reference(path, root=root)
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
@@ -339,7 +394,12 @@ def _read_bounded_yaml(path: Path, *, root: Path) -> Any:
     for event in yaml.parse(text):
         if isinstance(event, yaml.events.AliasEvent) or getattr(event, "anchor", None):
             raise ValueError("YAML aliases and anchors are forbidden")
-    return yaml.safe_load(text)
+    return yaml.safe_load(text), hashlib.sha256(raw).hexdigest()
+
+
+def _read_bounded_yaml(path: Path, *, root: Path) -> Any:
+    payload, _ = _read_bounded_yaml_with_sha256(path, root=root)
+    return payload
 
 
 def _preflight_parquet(
@@ -518,6 +578,25 @@ def _validate_software(value: Any) -> Mapping[str, Any]:
     return software
 
 
+def _trusted_raw_checkpoint(
+    producer: Mapping[str, Any],
+    *,
+    artifact_sha256: str,
+    manifest_sha256: str,
+    content_sha256: str | None = None,
+) -> TrustedRawCheckpoint | None:
+    normalized = {str(key): str(item) for key, item in producer.items()}
+    for trusted in TRUSTED_RAW_CHECKPOINTS:
+        if (
+            normalized == trusted.producer_software
+            and artifact_sha256 == trusted.artifact_sha256
+            and manifest_sha256 == trusted.manifest_sha256
+            and (content_sha256 is None or content_sha256 == trusted.content_sha256)
+        ):
+            return trusted
+    return None
+
+
 def _validate_trace(value: Any, *, context: str) -> Mapping[str, Any]:
     trace = _require_keys(
         value,
@@ -538,6 +617,8 @@ def _validate_trace(value: Any, *, context: str) -> Mapping[str, Any]:
         raise ValueError(f"{context}: service endpoint mismatch")
     for key in ("query_sha256", "input_sha256", "response_sha256"):
         _require_sha256(trace[key], context=f"{context}.{key}")
+        if trace[key] == "0" * 64:
+            raise ValueError(f"{context}.{key}: all-zero provenance digest is forbidden")
     if not isinstance(trace["response_rows"], int) or trace["response_rows"] < 0:
         raise ValueError(f"{context}: response_rows must be non-negative")
     if trace["response_rows"] > validation.MAX_EXCLUSION_ROWS:
@@ -749,19 +830,30 @@ def validate_raw_manifest(payload: Any) -> Mapping[str, Any]:
     return manifest
 
 
-def load_raw_checkpoint(cache_path: Path) -> tuple[pd.DataFrame, Mapping[str, Any]]:
+def _load_raw_checkpoint_record(
+    cache_path: Path,
+) -> tuple[pd.DataFrame, Mapping[str, Any], str]:
     manifest_path = raw_manifest_path(cache_path)
     root = cache_path.parent
     if not root.exists() or root.is_symlink():
         raise FileNotFoundError("safe raw checkpoint directory not found")
     if not cache_path.is_file() or not manifest_path.is_file():
         raise FileNotFoundError("complete raw checkpoint pair not found")
-    manifest = validate_raw_manifest(_read_bounded_yaml(manifest_path, root=root))
-    if dict(manifest["software"]) != software_provenance():
-        raise ValueError("raw checkpoint software provenance does not match runtime")
+    payload, manifest_sha256 = _read_bounded_yaml_with_sha256(manifest_path, root=root)
+    manifest = validate_raw_manifest(payload)
+    producer = dict(manifest["software"])
     descriptor = manifest["artifact"]
     if descriptor["path"] != cache_path.name:
         raise ValueError("raw checkpoint manifest names a different artifact")
+    trusted = _trusted_raw_checkpoint(
+        producer,
+        artifact_sha256=str(descriptor["sha256"]),
+        manifest_sha256=manifest_sha256,
+    )
+    if trusted is None and producer != software_provenance():
+        raise ValueError(
+            "raw checkpoint software provenance/byte identity is not an approved checkpoint"
+        )
     frame = _read_verified_parquet(
         cache_path,
         root=root,
@@ -769,6 +861,8 @@ def load_raw_checkpoint(cache_path: Path) -> tuple[pd.DataFrame, Mapping[str, An
         descriptor=descriptor,
     )
     validation.validate_joined_source_frame(frame, maximum_rows=validation.MAX_RAW_CONTROL_ROWS)
+    if trusted is not None and sha256_frame(frame) != trusted.content_sha256:
+        raise ValueError("trusted raw checkpoint semantic content SHA-256 mismatch")
     actual_counts = _rows_by_stratum(frame, manifest["selection_strata"])
     for actual, registered in zip(actual_counts, manifest["selection_strata"], strict=True):
         if actual["row_count"] != registered["collected_rows"]:
@@ -787,7 +881,19 @@ def load_raw_checkpoint(cache_path: Path) -> tuple[pd.DataFrame, Mapping[str, An
             and int(selected["gaia_dr3_source_id"].max()) != registered["cursor_source_id"]
         ):
             raise ValueError("raw checkpoint cursor does not match its stratum rows")
+    return frame, manifest, manifest_sha256
+
+
+def load_raw_checkpoint(cache_path: Path) -> tuple[pd.DataFrame, Mapping[str, Any]]:
+    frame, manifest, _ = _load_raw_checkpoint_record(cache_path)
     return frame, manifest
+
+
+def load_raw_checkpoint_record(
+    cache_path: Path,
+) -> tuple[pd.DataFrame, Mapping[str, Any], str]:
+    """Load a checkpoint plus the digest of its bounded, no-follow manifest read."""
+    return _load_raw_checkpoint_record(cache_path)
 
 
 def _artifact_descriptor(
@@ -859,7 +965,41 @@ def build_control_manifest(
     filter_counts: dict[str, int],
     selection_target_rows: int,
     selection_strata: list[dict[str, Any]],
+    raw_input_provenance: dict[str, Any],
 ) -> dict[str, Any]:
+    release_software = software_provenance()
+    raw_descriptor = _artifact_descriptor(
+        raw_candidates_path,
+        raw_candidates,
+        schema_version=RAW_SCHEMA_VERSION,
+    )
+    raw_input = _require_keys(
+        raw_input_provenance,
+        {
+            "artifact_sha256",
+            "checkpoint_manifest_sha256",
+            "producer_software",
+            "content_sha256",
+        },
+        context="raw input provenance",
+    )
+    input_content_sha256 = _require_sha256(
+        raw_input["content_sha256"], context="raw input provenance.content_sha256"
+    )
+    if input_content_sha256 != sha256_frame(raw_candidates):
+        raise ValueError("raw input semantic content does not match released raw candidates")
+    release_raw_input = {
+        "artifact_sha256": _require_sha256(
+            raw_input["artifact_sha256"], context="raw input provenance.artifact_sha256"
+        ),
+        "checkpoint_manifest_sha256": _require_sha256(
+            raw_input["checkpoint_manifest_sha256"],
+            context="raw input provenance.checkpoint_manifest_sha256",
+        ),
+        "producer_software": dict(_validate_software(raw_input["producer_software"])),
+        "content_sha256": input_content_sha256,
+        "released_artifact_sha256": raw_descriptor["sha256"],
+    }
     return {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "status": VALID_STATUS,
@@ -876,7 +1016,8 @@ def build_control_manifest(
             "simbad": f"SIMBAD live database at {retrieved_at_utc}",
             "chen": "VizieR J/ApJS/211/25/catalog; 2021-08-10 release",
         },
-        "software": software_provenance(),
+        "software": release_software,
+        "raw_input_provenance": release_raw_input,
         "selection": {
             "strategy": "galactic-longitude-hemisphere-v1",
             "target_rows": selection_target_rows,
@@ -884,11 +1025,7 @@ def build_control_manifest(
             "retained_rows_by_stratum": _rows_by_stratum(controls, selection_strata),
         },
         "artifacts": {
-            "raw_candidates": _artifact_descriptor(
-                raw_candidates_path,
-                raw_candidates,
-                schema_version=RAW_SCHEMA_VERSION,
-            ),
+            "raw_candidates": raw_descriptor,
             "controls": _artifact_descriptor(control_path, controls),
             "exclusions": _artifact_descriptor(exclusions_path, exclusions),
         },
@@ -917,6 +1054,7 @@ def validate_control_manifest(payload: Any) -> Mapping[str, Any]:
             "generating_command",
             "catalog_releases",
             "software",
+            "raw_input_provenance",
             "selection",
             "artifacts",
             "query_provenance",
@@ -938,6 +1076,30 @@ def validate_control_manifest(payload: Any) -> Mapping[str, Any]:
     if not all(isinstance(value, str) and value for value in releases.values()):
         raise ValueError("catalog releases must be non-empty")
     _validate_software(manifest["software"])
+    raw_input = _require_keys(
+        manifest["raw_input_provenance"],
+        {
+            "artifact_sha256",
+            "checkpoint_manifest_sha256",
+            "producer_software",
+            "content_sha256",
+            "released_artifact_sha256",
+        },
+        context="raw_input_provenance",
+    )
+    checkpoint_artifact_sha256 = _require_sha256(
+        raw_input["artifact_sha256"], context="raw_input_provenance.artifact_sha256"
+    )
+    checkpoint_manifest_sha256 = _require_sha256(
+        raw_input["checkpoint_manifest_sha256"],
+        context="raw_input_provenance.checkpoint_manifest_sha256",
+    )
+    _require_sha256(raw_input["content_sha256"], context="raw_input_provenance.content_sha256")
+    released_artifact_sha256 = _require_sha256(
+        raw_input["released_artifact_sha256"],
+        context="raw_input_provenance.released_artifact_sha256",
+    )
+    raw_producer = _validate_software(raw_input["producer_software"])
     selection = _require_keys(
         manifest["selection"],
         {"strategy", "target_rows", "strata", "retained_rows_by_stratum"},
@@ -969,6 +1131,16 @@ def validate_control_manifest(payload: Any) -> Mapping[str, Any]:
     )
     if raw_candidates["columns"] != list(validation.JOINED_SOURCE_COLUMNS):
         raise ValueError("raw candidate artifact columns do not match registered schema")
+    if released_artifact_sha256 != raw_candidates["sha256"]:
+        raise ValueError("raw input provenance does not bind the released raw artifact")
+    trusted_checkpoint = _trusted_raw_checkpoint(
+        raw_producer,
+        artifact_sha256=checkpoint_artifact_sha256,
+        manifest_sha256=checkpoint_manifest_sha256,
+        content_sha256=str(raw_input["content_sha256"]),
+    )
+    if trusted_checkpoint is None:
+        raise ValueError("raw input provenance does not name an approved exact checkpoint")
     if controls["columns"] != list(validation.CONTROL_ARTIFACT_COLUMNS):
         raise ValueError("control artifact columns do not match registered schema")
     if exclusions["columns"] != list(validation.EXCLUSION_COLUMNS):
@@ -1086,6 +1258,8 @@ def load_control_artifact(manifest_path: Path) -> pd.DataFrame:
     validation.validate_joined_source_frame(
         raw_candidates, maximum_rows=validation.MAX_RAW_CONTROL_ROWS
     )
+    if sha256_frame(raw_candidates) != manifest["raw_input_provenance"]["content_sha256"]:
+        raise ValueError("released raw candidate content does not match raw input provenance")
     validation.validate_control_artifact(controls, minimum_rows=MIN_CONTROL_ROWS)
     validation.validate_exclusions(exclusions)
     validation.validate_control_derivation(raw_candidates, controls, exclusions)

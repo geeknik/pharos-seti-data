@@ -102,3 +102,47 @@ Expected output:
 ```text
 68e4f2d3359a5c4f208426d80a56f58788bdea6003e07ae0a75dc68cbcc259eb  pre_registration/v0.1.2_subtype_confounders_and_xray_evidence.md
 ```
+
+---
+
+## v0.1.3 — Hardened Quiet-Negative Control Population
+
+| Field | Value |
+|---|---|
+| Document | [`v0.1.3_control_population.md`](v0.1.3_control_population.md) |
+| Date frozen | 2026-08-06 |
+| Status | FROZEN |
+| Supersedes | v0.1 Section 6 quiet-negative population acquisition procedure and v0.1.2 implementation assumptions for that procedure only |
+| Superseded by | (none) |
+
+### Freeze record
+
+| Stage | Date | File size | SHA-256 |
+|---|---|---:|---|
+| Initial freeze | 2026-08-06 | 87,851 bytes | `b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43` |
+
+### Supporting disposition record
+
+The observed v0.1.2 hardened control-population pilot did not ship and is not an input to v0.1.3. Its immutable non-release record is preserved for audit:
+
+| Field | Value |
+|---|---|
+| Document | [`failed_attempts/v0.1.2_hardened_control_population.md`](failed_attempts/v0.1.2_hardened_control_population.md) |
+| Date recorded | 2026-08-06 |
+| Status | DID NOT SHIP — quarantined; prohibited from model fitting, scoring, calibration, inference, release use, or v0.1.3 reuse |
+| File size | 15,481 bytes |
+| SHA-256 | `a6e32d509e31c3e346e79a81eb70b56d7d5310872624480742081b1387853256` |
+
+### Verification commands
+
+```sh
+shasum -a 256 pre_registration/v0.1.3_control_population.md
+shasum -a 256 pre_registration/failed_attempts/v0.1.2_hardened_control_population.md
+```
+
+Expected output:
+
+```text
+b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43  pre_registration/v0.1.3_control_population.md
+a6e32d509e31c3e346e79a81eb70b56d7d5310872624480742081b1387853256  pre_registration/failed_attempts/v0.1.2_hardened_control_population.md
+```

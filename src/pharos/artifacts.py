@@ -42,6 +42,7 @@ SERVICE_ENDPOINTS = {
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+_RELEASE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 @dataclass(frozen=True)
 class TrustedRawCheckpoint:
@@ -53,6 +54,7 @@ class TrustedRawCheckpoint:
     artifact_sha256: str
     manifest_sha256: str
     content_sha256: str
+    row_count: int
 
     @property
     def producer_software(self) -> dict[str, str]:
@@ -63,19 +65,83 @@ class TrustedRawCheckpoint:
         }
 
 
-# This is a checkpoint allow-list, not a producer allow-list.  A cache that
-# merely claims the same producer is rejected unless both immutable byte
-# digests also match this reviewed 55,000-row acquisition.
-TRUSTED_RAW_CHECKPOINTS: tuple[TrustedRawCheckpoint, ...] = (
-    TrustedRawCheckpoint(
-        git_commit="a0e99b7d1e0300d153d164398239cae22663e69d",
-        source_tree_sha256="186db27ebe7aa3a2ac419ede19c1c244d66fd4f0d68325b3422edf40524bba46",
-        uv_lock_sha256="a5947dc7f96f67447ab0a2d5d412b22aa4f3ff65765819518a359dcb731bf731",
-        artifact_sha256="841bc68c0e22218070caf77bb7454ee72fc3c66a1b71f5465525d779c0b7f840",
-        manifest_sha256="ba129cce109db2e49cc5a00424d4c4e7dbaa878ede149d9c5eee0ed4a25e8fd6",
-        content_sha256="789754d255060f2e4e37b60b9c1e89d9551ed75bebaf1f9c7f64d80d989fb8e8",
-    ),
-)
+@dataclass(frozen=True)
+class TrustedReleaseArtifact:
+    """Exact byte and semantic identity of one artifact in a reviewed release."""
+
+    path: str
+    sha256: str
+    row_count: int
+    columns: tuple[str, ...]
+    schema_version: str
+    content_sha256: str
+
+    @property
+    def descriptor(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "sha256": self.sha256,
+            "row_count": self.row_count,
+            "columns": list(self.columns),
+            "schema_version": self.schema_version,
+        }
+
+
+@dataclass(frozen=True)
+class TrustedFinalRelease:
+    """Reviewed immutable release allowed across later compatible runtimes."""
+
+    release_id: str
+    manifest_sha256: str
+    producer_software: tuple[str, str, str]
+    raw_candidates: TrustedReleaseArtifact
+    controls: TrustedReleaseArtifact
+    exclusions: TrustedReleaseArtifact
+    query_provenance_sha256: str
+    gaia_query_hashes_sha256: str
+    simbad_query_sha256: str
+    simbad_raw_response_rows: int
+    simbad_normalized_rows: int
+    chen_query_sha256: str
+    chen_response_rows: int
+    chen_normalized_rows: int
+
+    @property
+    def software(self) -> dict[str, str]:
+        commit, source_tree, lock = self.producer_software
+        return {
+            "git_commit": commit,
+            "source_tree_sha256": source_tree,
+            "uv_lock_sha256": lock,
+        }
+
+
+@dataclass(frozen=True)
+class AuthorizedControlRelease:
+    """Registry-authorized controls and their verified immutable paths."""
+
+    release_id: str
+    manifest_path: Path
+    controls_path: Path
+    controls_sha256: str
+    controls_descriptor: TrustedReleaseArtifact
+    controls: pd.DataFrame
+
+
+# Exact reviewed checkpoint allow-list. Failed pilots and acquisition
+# checkpoints are intentionally absent; their identities remain only in the
+# non-release failure record and cannot authorize a public loader.
+TRUSTED_RAW_CHECKPOINTS: tuple[TrustedRawCheckpoint, ...] = ()
+
+
+# Exact reviewed final-release allow-list. The failed v0.1.2 hardened pilot is
+# not a release and is deliberately absent, so later runtimes reject it.
+TRUSTED_FINAL_RELEASES: tuple[TrustedFinalRelease, ...] = ()
+
+
+class ReleaseRegistryError(ValueError):
+    """The immutable final-release authorization registry is malformed."""
+
 
 
 def sha256_file(path: Path) -> str:
@@ -583,18 +649,267 @@ def _trusted_raw_checkpoint(
     *,
     artifact_sha256: str,
     manifest_sha256: str,
+    row_count: int,
     content_sha256: str | None = None,
 ) -> TrustedRawCheckpoint | None:
     normalized = {str(key): str(item) for key, item in producer.items()}
-    for trusted in TRUSTED_RAW_CHECKPOINTS:
+    for trusted in _validated_raw_checkpoint_registry():
         if (
             normalized == trusted.producer_software
             and artifact_sha256 == trusted.artifact_sha256
             and manifest_sha256 == trusted.manifest_sha256
+            and row_count == trusted.row_count
             and (content_sha256 is None or content_sha256 == trusted.content_sha256)
         ):
             return trusted
     return None
+
+
+def _trace_identity_sha256(traces: Sequence[Mapping[str, Any]]) -> str:
+    digest = hashlib.sha256()
+    keys = (
+        "service",
+        "endpoint",
+        "query_sha256",
+        "input_sha256",
+        "response_sha256",
+        "response_rows",
+        "requested_at_utc",
+        "received_at_utc",
+    )
+    for trace in traces:
+        for key in keys:
+            digest.update(str(trace[key]).encode("utf-8"))
+            digest.update(b"\0")
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _registry_sha256(value: Any, *, field: str) -> str:
+    if type(value) is not str or not _SHA256_RE.fullmatch(value) or value == "0" * 64:
+        raise ReleaseRegistryError(f"release registry {field} must be a non-zero SHA-256")
+    return value
+
+
+def _validate_registry_artifact(
+    value: Any,
+    *,
+    field: str,
+    expected_schema: str,
+    expected_columns: tuple[str, ...],
+    minimum_rows: int,
+    maximum_rows: int,
+) -> TrustedReleaseArtifact:
+    if type(value) is not TrustedReleaseArtifact:
+        raise ReleaseRegistryError(f"release registry {field} has an invalid artifact type")
+    if type(value.path) is not str:
+        raise ReleaseRegistryError(f"release registry {field}.path must be a string")
+    try:
+        path = _require_relative_path(value.path, context=f"release registry {field}.path")
+    except (TypeError, ValueError) as exc:
+        raise ReleaseRegistryError(f"release registry {field}.path is invalid") from exc
+    digest = _registry_sha256(value.sha256, field=f"{field}.sha256")
+    if path != f"{path.split('.', 1)[0]}.{digest}.parquet":
+        raise ReleaseRegistryError(f"release registry {field}.path is not content-addressed")
+    if (
+        not isinstance(value.row_count, int)
+        or isinstance(value.row_count, bool)
+        or not minimum_rows <= value.row_count <= maximum_rows
+    ):
+        raise ReleaseRegistryError(f"release registry {field}.row_count is invalid")
+    if (
+        type(value.columns) is not tuple
+        or not all(type(column) is str and column for column in value.columns)
+        or value.columns != expected_columns
+    ):
+        raise ReleaseRegistryError(f"release registry {field}.columns do not match schema")
+    if type(value.schema_version) is not str or value.schema_version != expected_schema:
+        raise ReleaseRegistryError(f"release registry {field}.schema_version is invalid")
+    _registry_sha256(value.content_sha256, field=f"{field}.content_sha256")
+    return value
+
+
+def _validated_final_release_registry() -> tuple[TrustedFinalRelease, ...]:
+    registry = TRUSTED_FINAL_RELEASES
+    if type(registry) is not tuple:
+        raise ReleaseRegistryError("final release registry must be a tuple")
+    release_ids: set[str] = set()
+    for index, release in enumerate(registry):
+        field = f"entries[{index}]"
+        if type(release) is not TrustedFinalRelease:
+            raise ReleaseRegistryError(f"release registry {field} has an invalid entry type")
+        if type(release.release_id) is not str or not _RELEASE_ID_RE.fullmatch(
+            release.release_id
+        ):
+            raise ReleaseRegistryError(f"release registry {field}.release_id is invalid")
+        if release.release_id in release_ids:
+            raise ReleaseRegistryError("release registry contains duplicate release identities")
+        release_ids.add(release.release_id)
+        _registry_sha256(release.manifest_sha256, field=f"{field}.manifest_sha256")
+        software = release.producer_software
+        if type(software) is not tuple or len(software) != 3:
+            raise ReleaseRegistryError(f"release registry {field}.producer_software is invalid")
+        git_commit, source_tree, lock = software
+        if type(git_commit) is not str or not _GIT_COMMIT_RE.fullmatch(git_commit):
+            raise ReleaseRegistryError(f"release registry {field}.git_commit is invalid")
+        _registry_sha256(source_tree, field=f"{field}.source_tree_sha256")
+        _registry_sha256(lock, field=f"{field}.uv_lock_sha256")
+        raw = _validate_registry_artifact(
+            release.raw_candidates,
+            field=f"{field}.raw_candidates",
+            expected_schema=RAW_SCHEMA_VERSION,
+            expected_columns=validation.JOINED_SOURCE_COLUMNS,
+            minimum_rows=1,
+            maximum_rows=validation.MAX_RAW_CONTROL_ROWS,
+        )
+        controls = _validate_registry_artifact(
+            release.controls,
+            field=f"{field}.controls",
+            expected_schema=CONTROL_SCHEMA_VERSION,
+            expected_columns=validation.CONTROL_ARTIFACT_COLUMNS,
+            minimum_rows=MIN_CONTROL_ROWS,
+            maximum_rows=validation.MAX_FINAL_CONTROL_ROWS,
+        )
+        exclusions = _validate_registry_artifact(
+            release.exclusions,
+            field=f"{field}.exclusions",
+            expected_schema=CONTROL_SCHEMA_VERSION,
+            expected_columns=validation.EXCLUSION_COLUMNS,
+            minimum_rows=0,
+            maximum_rows=validation.MAX_EXCLUSION_ROWS,
+        )
+        if raw.row_count < controls.row_count:
+            raise ReleaseRegistryError("release registry controls exceed raw candidate rows")
+        for name in (
+            "query_provenance_sha256",
+            "gaia_query_hashes_sha256",
+            "simbad_query_sha256",
+            "chen_query_sha256",
+        ):
+            _registry_sha256(getattr(release, name), field=f"{field}.{name}")
+        counts = (
+            release.simbad_raw_response_rows,
+            release.simbad_normalized_rows,
+            release.chen_response_rows,
+            release.chen_normalized_rows,
+        )
+        if any(
+            not isinstance(count, int)
+            or isinstance(count, bool)
+            or not 0 <= count <= validation.MAX_EXCLUSION_ROWS
+            for count in counts
+        ):
+            raise ReleaseRegistryError(f"release registry {field} response counts are invalid")
+        if (
+            release.simbad_normalized_rows > release.simbad_raw_response_rows
+            or release.chen_normalized_rows > release.chen_response_rows
+            or release.simbad_normalized_rows + release.chen_normalized_rows
+            > exclusions.row_count
+        ):
+            raise ReleaseRegistryError(
+                f"release registry {field} response counts are inconsistent"
+            )
+    return registry
+
+
+def _validated_raw_checkpoint_registry() -> tuple[TrustedRawCheckpoint, ...]:
+    registry = TRUSTED_RAW_CHECKPOINTS
+    if type(registry) is not tuple:
+        raise ReleaseRegistryError("raw checkpoint registry must be a tuple")
+    seen_entries: set[TrustedRawCheckpoint] = set()
+    seen_artifacts: set[str] = set()
+    seen_manifests: set[str] = set()
+    seen_contents: set[str] = set()
+    for index, checkpoint in enumerate(registry):
+        field = f"raw_entries[{index}]"
+        if type(checkpoint) is not TrustedRawCheckpoint:
+            raise ReleaseRegistryError(
+                f"raw checkpoint registry {field} has an invalid entry type"
+            )
+        software = (
+            checkpoint.git_commit,
+            checkpoint.source_tree_sha256,
+            checkpoint.uv_lock_sha256,
+        )
+        git_commit, source_tree, lock = software
+        if type(git_commit) is not str or not _GIT_COMMIT_RE.fullmatch(git_commit):
+            raise ReleaseRegistryError(
+                f"raw checkpoint registry {field}.git_commit is invalid"
+            )
+        _registry_sha256(source_tree, field=f"{field}.source_tree_sha256")
+        _registry_sha256(lock, field=f"{field}.uv_lock_sha256")
+        artifact = _registry_sha256(
+            checkpoint.artifact_sha256,
+            field=f"{field}.artifact_sha256",
+        )
+        manifest = _registry_sha256(
+            checkpoint.manifest_sha256,
+            field=f"{field}.manifest_sha256",
+        )
+        content = _registry_sha256(
+            checkpoint.content_sha256,
+            field=f"{field}.content_sha256",
+        )
+        if (
+            not isinstance(checkpoint.row_count, int)
+            or isinstance(checkpoint.row_count, bool)
+            or not 1 <= checkpoint.row_count <= validation.MAX_RAW_CONTROL_ROWS
+        ):
+            raise ReleaseRegistryError(
+                f"raw checkpoint registry {field}.row_count is invalid"
+            )
+        if checkpoint in seen_entries:
+            raise ReleaseRegistryError("raw checkpoint registry contains a duplicate entry")
+        seen_entries.add(checkpoint)
+        if artifact in seen_artifacts:
+            raise ReleaseRegistryError(
+                "raw checkpoint registry contains a duplicate artifact identity"
+            )
+        if manifest in seen_manifests:
+            raise ReleaseRegistryError(
+                "raw checkpoint registry contains a duplicate manifest identity"
+            )
+        if content in seen_contents:
+            raise ReleaseRegistryError(
+                "raw checkpoint registry contains a duplicate semantic identity"
+            )
+        seen_artifacts.add(artifact)
+        seen_manifests.add(manifest)
+        seen_contents.add(content)
+    return registry
+
+
+def _trusted_final_release(
+    release_id: str,
+    manifest: Mapping[str, Any],
+    manifest_sha256: str,
+) -> TrustedFinalRelease | None:
+    if not isinstance(release_id, str) or not release_id:
+        raise ValueError("release identity must be a non-empty registry key")
+    if not _RELEASE_ID_RE.fullmatch(release_id):
+        raise ValueError("release identity has invalid syntax")
+    registry = _validated_final_release_registry()
+    matches = [release for release in registry if release.release_id == release_id]
+    if len(matches) != 1:
+        raise ValueError("release identity is not registry-authorized")
+    trusted = matches[0]
+    if manifest_sha256 != trusted.manifest_sha256:
+        return None
+    if dict(manifest["software"]) != trusted.software:
+        return None
+    expected = {
+        "raw_candidates": trusted.raw_candidates.descriptor,
+        "controls": trusted.controls.descriptor,
+        "exclusions": trusted.exclusions.descriptor,
+    }
+    if dict(manifest["artifacts"]) != expected:
+        return None
+    traces = manifest["query_provenance"]
+    if not isinstance(traces, list):
+        return None
+    if _trace_identity_sha256(traces) != trusted.query_provenance_sha256:
+        return None
+    return trusted
 
 
 def _validate_trace(value: Any, *, context: str) -> Mapping[str, Any]:
@@ -619,7 +934,11 @@ def _validate_trace(value: Any, *, context: str) -> Mapping[str, Any]:
         _require_sha256(trace[key], context=f"{context}.{key}")
         if trace[key] == "0" * 64:
             raise ValueError(f"{context}.{key}: all-zero provenance digest is forbidden")
-    if not isinstance(trace["response_rows"], int) or trace["response_rows"] < 0:
+    if (
+        not isinstance(trace["response_rows"], int)
+        or isinstance(trace["response_rows"], bool)
+        or trace["response_rows"] < 0
+    ):
         raise ValueError(f"{context}: response_rows must be non-negative")
     if trace["response_rows"] > validation.MAX_EXCLUSION_ROWS:
         raise ValueError(f"{context}: response row bound exceeded")
@@ -849,6 +1168,7 @@ def _load_raw_checkpoint_record(
         producer,
         artifact_sha256=str(descriptor["sha256"]),
         manifest_sha256=manifest_sha256,
+        row_count=int(descriptor["row_count"]),
     )
     if trusted is None and producer != software_provenance():
         raise ValueError(
@@ -1073,8 +1393,15 @@ def validate_control_manifest(payload: Any) -> Mapping[str, Any]:
         {"gaia", "allwise", "tmass", "simbad", "chen"},
         context="catalog_releases",
     )
-    if not all(isinstance(value, str) and value for value in releases.values()):
-        raise ValueError("catalog releases must be non-empty")
+    expected_releases = {
+        "gaia": "Gaia DR3",
+        "allwise": "AllWISE Source Catalog",
+        "tmass": "2MASS All-Sky Point Source Catalog",
+        "simbad": f"SIMBAD live database at {manifest['retrieved_at_utc']}",
+        "chen": validation.CHEN_EXCLUSION_RELEASE,
+    }
+    if dict(releases) != expected_releases:
+        raise ValueError("catalog releases do not match the registered releases")
     _validate_software(manifest["software"])
     raw_input = _require_keys(
         manifest["raw_input_provenance"],
@@ -1137,6 +1464,7 @@ def validate_control_manifest(payload: Any) -> Mapping[str, Any]:
         raw_producer,
         artifact_sha256=checkpoint_artifact_sha256,
         manifest_sha256=checkpoint_manifest_sha256,
+        row_count=int(raw_candidates["row_count"]),
         content_sha256=str(raw_input["content_sha256"]),
     )
     if trusted_checkpoint is None:
@@ -1219,15 +1547,228 @@ def validate_control_manifest(payload: Any) -> Mapping[str, Any]:
     return manifest
 
 
-def load_control_artifact(manifest_path: Path) -> pd.DataFrame:
+def _validate_release_query_provenance(
+    manifest: Mapping[str, Any],
+    raw_candidates: pd.DataFrame,
+    exclusions: pd.DataFrame,
+    *,
+    trusted: TrustedFinalRelease | None,
+) -> None:
+    """Reconstruct request coverage from immutable inputs and reject gaps."""
+    # Current-tree query builders are consulted only for untrusted/unpublished
+    # releases. The exact reviewed release remains independent of later
+    # producer refactors because its complete trace identity is immutable.
+    producer_control_population: Any = None
+    producer_sources: Any = None
+    if trusted is None:
+        from pharos import control_population as producer_control_population
+        from pharos import sources as producer_sources
+
+    traces = [
+        _validate_trace(item, context=f"query_provenance[{index}]")
+        for index, item in enumerate(manifest["query_provenance"])
+    ]
+    previous_received: datetime | None = None
+    for trace in traces:
+        requested = _validate_timestamp(trace["requested_at_utc"])
+        if previous_received is not None and requested < previous_received:
+            raise ValueError("query provenance requests are reordered or overlap")
+        previous_received = _validate_timestamp(trace["received_at_utc"])
+
+    registered_strata = manifest["selection"]["strata"]
+    expected_gaia_count = sum(
+        (int(item["quota"]) + validation.MAX_NETWORK_SOURCE_CHUNK - 1)
+        // validation.MAX_NETWORK_SOURCE_CHUNK
+        for item in registered_strata
+    )
+    bp_rp = validation.derive_bp_rp_controls(raw_candidates)
+    expected_simbad_count = (
+        len(bp_rp) + validation.MAX_NETWORK_SOURCE_CHUNK - 1
+    ) // validation.MAX_NETWORK_SOURCE_CHUNK
+    expected_services = (
+        ["Gaia TAP joined"] * expected_gaia_count
+        + ["SIMBAD"] * expected_simbad_count
+        + ["VizieR Chen2014"]
+    )
+    if [str(trace["service"]) for trace in traces] != expected_services:
+        raise ValueError("query provenance service count/order is incomplete")
+
+    gaia_traces = traces[:expected_gaia_count]
+    simbad_end = expected_gaia_count + expected_simbad_count
+    simbad_traces = traces[expected_gaia_count:simbad_end]
+    chen_trace = traces[simbad_end]
+
+    # The raw artifact is stored in request order. Recreate the round-robin
+    # stratum pagination, including each page size, cursor, and query binding.
+    states: list[dict[str, Any]] = [
+        {
+            "stratum_id": str(item["stratum_id"]),
+            "longitude_min_deg": float(item["longitude_min_deg"]),
+            "longitude_max_deg": float(item["longitude_max_deg"]),
+            "hemisphere": str(item["hemisphere"]),
+            "quota": int(item["quota"]),
+            "cursor_source_id": 0,
+            "collected_rows": 0,
+        }
+        for item in registered_strata
+    ]
+    raw_offset = 0
+    trace_offset = 0
+    while any(item["collected_rows"] < item["quota"] for item in states):
+        for index, state in enumerate(states):
+            remaining = int(state["quota"]) - int(state["collected_rows"])
+            if remaining <= 0:
+                continue
+            requested_rows = min(validation.MAX_NETWORK_SOURCE_CHUNK, remaining)
+            trace = gaia_traces[trace_offset]
+            trace_offset += 1
+            if int(trace["response_rows"]) != requested_rows:
+                raise ValueError("Gaia provenance page size does not match selection quota")
+            page = raw_candidates.iloc[raw_offset : raw_offset + requested_rows]
+            raw_offset += requested_rows
+            if len(page) != requested_rows:
+                raise ValueError("Gaia provenance pages do not cover the raw artifact")
+            ids = page["gaia_dr3_source_id"].astype("int64")
+            if not ids.is_monotonic_increasing or int(ids.iloc[0]) <= int(
+                state["cursor_source_id"]
+            ):
+                raise ValueError("Gaia provenance page violates keyset order")
+            longitude_ok = (page["galactic_l"] >= float(state["longitude_min_deg"])) & (
+                page["galactic_l"] < float(state["longitude_max_deg"])
+            )
+            latitude_ok = (
+                page["galactic_b"] > 20.0
+                if state["hemisphere"] == "north"
+                else page["galactic_b"] < -20.0
+            )
+            if not (longitude_ok & latitude_ok).all():
+                raise ValueError("Gaia provenance page contains the wrong sky stratum")
+            if trace["input_sha256"] != trace["query_sha256"]:
+                raise ValueError("Gaia provenance input/query mismatch")
+            if trusted is None:
+                runtime_stratum = producer_sources.SamplingStratum(
+                    stratum_id=state["stratum_id"],
+                    longitude_min_deg=state["longitude_min_deg"],
+                    longitude_max_deg=state["longitude_max_deg"],
+                    hemisphere=state["hemisphere"],
+                    quota=state["quota"],
+                    cursor_source_id=state["cursor_source_id"],
+                    collected_rows=state["collected_rows"],
+                )
+                query = producer_sources.build_quiet_negative_joined_adql(
+                    requested_rows,
+                    after_source_id=state["cursor_source_id"],
+                    stratum=runtime_stratum,
+                )
+                expected_query_sha256 = hashlib.sha256(query.encode("utf-8")).hexdigest()
+                if trace["query_sha256"] != expected_query_sha256:
+                    raise ValueError("Gaia provenance query does not match current producer")
+            states[index] = {
+                **state,
+                "cursor_source_id": int(ids.iloc[-1]),
+                "collected_rows": int(state["collected_rows"]) + requested_rows,
+            }
+    if raw_offset != len(raw_candidates) or trace_offset != len(gaia_traces):
+        raise ValueError("Gaia provenance does not exactly cover raw candidates")
+    for actual, registered in zip(states, registered_strata, strict=True):
+        if (
+            int(actual["cursor_source_id"]) != int(registered["cursor_source_id"])
+            or int(actual["collected_rows"]) != int(registered["collected_rows"])
+        ):
+            raise ValueError("Gaia provenance cursor does not match final selection state")
+    if trusted is not None:
+        gaia_hash = sha256_strings([str(trace["query_sha256"]) for trace in gaia_traces])
+        if gaia_hash != trusted.gaia_query_hashes_sha256:
+            raise ValueError("trusted Gaia query provenance identity mismatch")
+
+    simbad_query_sha256 = (
+        trusted.simbad_query_sha256
+        if trusted is not None
+        else hashlib.sha256(
+            producer_control_population._simbad_query_text().encode("utf-8")
+        ).hexdigest()
+    )
+    simbad_rows = exclusions[exclusions["exclusion_catalog"] == "SIMBAD"]
+    bp_ids = set(bp_rp["gaia_dr3_source_id"].astype(int))
+    if not set(exclusions["gaia_dr3_source_id"].astype(int)).issubset(bp_ids):
+        raise ValueError("external exclusion names a non-surviving parent source")
+    for index, trace in enumerate(simbad_traces):
+        chunk = bp_rp.iloc[
+            index
+            * validation.MAX_NETWORK_SOURCE_CHUNK : (index + 1)
+            * validation.MAX_NETWORK_SOURCE_CHUNK
+        ]
+        input_frame = chunk.loc[:, ["gaia_dr3_source_id", "ra", "dec"]].copy()
+        expected_input_sha256 = sha256_frame(input_frame)
+        if trace["query_sha256"] != simbad_query_sha256:
+            raise ValueError("SIMBAD provenance query does not match registered query")
+        if trace["input_sha256"] != expected_input_sha256:
+            raise ValueError("SIMBAD provenance input chunks are missing or reordered")
+        raw_rows = int(trace["response_rows"])
+        if raw_rows > len(chunk) * validation.MAX_MATCHES_PER_SOURCE_CATALOG:
+            raise ValueError("SIMBAD provenance response exceeds the chunk bound")
+        chunk_ids = set(chunk["gaia_dr3_source_id"].astype(int))
+        normalized_rows = int(simbad_rows["gaia_dr3_source_id"].astype(int).isin(chunk_ids).sum())
+        if raw_rows < normalized_rows or (raw_rows == 0) != (normalized_rows == 0):
+            raise ValueError("SIMBAD raw/normalized response counts are inconsistent")
+    simbad_raw_total = sum(int(trace["response_rows"]) for trace in simbad_traces)
+    if trusted is not None and (
+        simbad_raw_total != trusted.simbad_raw_response_rows
+        or len(simbad_rows) != trusted.simbad_normalized_rows
+    ):
+        raise ValueError("trusted SIMBAD raw/normalized counts do not match release identity")
+
+    if trusted is not None:
+        chen_query_sha256 = trusted.chen_query_sha256
+    else:
+        chen_descriptor = (
+            f"Vizier:{producer_control_population.CHEN_CATALOG}:"
+            f"columns=Name,_RA,_DE:row_limit={validation.MAX_CLI_SOURCE_IDS}"
+        )
+        chen_query_sha256 = hashlib.sha256(chen_descriptor.encode("utf-8")).hexdigest()
+    if (
+        chen_trace["query_sha256"] != chen_query_sha256
+        or chen_trace["input_sha256"] != chen_query_sha256
+    ):
+        raise ValueError("Chen provenance query/input does not match registered catalog")
+    chen_response_rows = int(chen_trace["response_rows"])
+    if not 0 <= chen_response_rows < validation.MAX_CLI_SOURCE_IDS:
+        raise ValueError("Chen provenance response row count is outside the catalog bound")
+    chen_rows = exclusions[exclusions["exclusion_catalog"] == "Chen2014"]
+    if len(chen_rows) > 0 and chen_response_rows == 0:
+        raise ValueError("Chen raw/normalized response counts are inconsistent")
+    if trusted is not None and (
+        chen_response_rows != trusted.chen_response_rows
+        or len(chen_rows) != trusted.chen_normalized_rows
+    ):
+        raise ValueError("trusted Chen raw/normalized counts do not match release identity")
+
+
+def _load_control_artifact(
+    manifest_path: Path,
+    *,
+    release_id: str | None,
+    review_only: bool,
+) -> tuple[pd.DataFrame, Path, TrustedFinalRelease | None]:
     root = manifest_path.parent
     if not root.exists() or root.is_symlink():
         raise FileNotFoundError("safe control release directory not found")
     if not manifest_path.is_file() or manifest_path.is_symlink():
         raise FileNotFoundError(f"conformant control manifest not found: {manifest_path.name}")
-    manifest = validate_control_manifest(_read_bounded_yaml(manifest_path, root=root))
-    if dict(manifest["software"]) != software_provenance():
-        raise ValueError("release software provenance does not match runtime")
+    payload, manifest_sha256 = _read_bounded_yaml_with_sha256(manifest_path, root=root)
+    manifest = validate_control_manifest(payload)
+    if review_only:
+        if release_id is not None:
+            raise ValueError("review-only validation must not name a release identity")
+        trusted = None
+        if dict(manifest["software"]) != software_provenance():
+            raise ValueError("candidate software provenance does not match review runtime")
+    else:
+        if release_id is None:
+            raise ValueError("scientific loading requires an explicit release identity")
+        trusted = _trusted_final_release(release_id, manifest, manifest_sha256)
+        if trusted is None:
+            raise ValueError("manifest bytes are not authorized for the release identity")
     prereg_path = repository_root() / PREREGISTRATION_RELATIVE_PATH
     if sha256_file(prereg_path) != PREREGISTRATION_SHA256:
         raise ValueError("frozen pre-registration bytes do not match release binding")
@@ -1263,6 +1804,21 @@ def load_control_artifact(manifest_path: Path) -> pd.DataFrame:
     validation.validate_control_artifact(controls, minimum_rows=MIN_CONTROL_ROWS)
     validation.validate_exclusions(exclusions)
     validation.validate_control_derivation(raw_candidates, controls, exclusions)
+    _validate_release_query_provenance(
+        manifest,
+        raw_candidates,
+        exclusions,
+        trusted=trusted,
+    )
+    if trusted is not None:
+        semantic_hashes = {
+            "raw_candidates": (raw_candidates, trusted.raw_candidates.content_sha256),
+            "controls": (controls, trusted.controls.content_sha256),
+            "exclusions": (exclusions, trusted.exclusions.content_sha256),
+        }
+        for name, (frame, expected) in semantic_hashes.items():
+            if sha256_frame(frame) != expected:
+                raise ValueError(f"trusted {name} semantic content SHA-256 mismatch")
     actual_retained = _rows_by_stratum(controls, manifest["selection"]["strata"])
     if actual_retained != manifest["selection"]["retained_rows_by_stratum"]:
         raise ValueError("control rows do not match retained stratum provenance")
@@ -1282,4 +1838,56 @@ def load_control_artifact(manifest_path: Path) -> pd.DataFrame:
         ].nunique()
         if int(actual) != counts[field]:
             raise ValueError(f"{catalog} exclusion count does not match manifest")
+    return controls, control_path, trusted
+
+
+def load_authorized_control_release(
+    manifest_path: Path,
+    *,
+    release_id: str,
+) -> AuthorizedControlRelease:
+    """Load one exact registry-authorized release for scientific analysis."""
+    controls, control_path, trusted = _load_control_artifact(
+        manifest_path,
+        release_id=release_id,
+        review_only=False,
+    )
+    if trusted is None:  # defensive invariant: scientific loading always authorizes.
+        raise ReleaseRegistryError("scientific release authorization was not retained")
+    return AuthorizedControlRelease(
+        release_id=release_id,
+        manifest_path=manifest_path.resolve(),
+        controls_path=control_path,
+        controls_sha256=trusted.controls.sha256,
+        controls_descriptor=trusted.controls,
+        controls=controls,
+    )
+
+
+def load_control_artifact(manifest_path: Path, *, release_id: str) -> pd.DataFrame:
+    """Load an exact registry-authorized release for scientific analysis.
+
+    Structural validity and current-producer provenance are intentionally
+    insufficient.  The caller must name one release identity in
+    ``TRUSTED_FINAL_RELEASES``, and the manifest, artifacts, provenance traces,
+    and semantic content must match that registry entry exactly.
+    """
+    return load_authorized_control_release(
+        manifest_path,
+        release_id=release_id,
+    ).controls
+
+
+def validate_control_release_candidate(manifest_path: Path) -> pd.DataFrame:
+    """Review a current-producer candidate without authorizing analysis use.
+
+    This API exists only for independent release review.  Model fitting,
+    calibration, injection, FDR, and ranking code must call
+    ``load_authorized_control_release`` with a registry identity instead.
+    """
+    controls, _, _ = _load_control_artifact(
+        manifest_path,
+        release_id=None,
+        review_only=True,
+    )
     return controls

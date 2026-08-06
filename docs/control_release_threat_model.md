@@ -50,6 +50,14 @@ release directory.
 - **Supply-chain drift:** all direct runtime and development dependencies are
   exactly pinned and the lock hash is part of release provenance.
 
+## Sampling claim boundary
+
+The 24-stratum plan balances only coarse Galactic-longitude/hemisphere cells.
+Rows are keyset-paginated by Gaia `source_id` inside each cell, so inclusion is
+not spatially uniform within a cell. The control population supports matched,
+coverage-stratified calibration; it is not a representative spatial sample of
+Gaia DR3 or of the Milky Way.
+
 No control in this design turns missing coverage into negative evidence, logs
 credentials or payloads, follows release symlinks, overwrites a prior release,
 or permits remote strings to become commands.

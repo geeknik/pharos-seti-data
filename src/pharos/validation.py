@@ -126,6 +126,14 @@ EXCLUSION_COLUMNS: tuple[str, ...] = (
     "catalog_release",
 )
 
+SIMBAD_YSO_TYPES: frozenset[str] = frozenset({"Y*O", "Or*", "TT*", "Ae*", "HH", "out"})
+SIMBAD_AGN_TYPES: frozenset[str] = frozenset(
+    {"AGN", "SyG", "Sy1", "Sy2", "rG", "LIN", "QSO", "Bla", "BLL"}
+)
+SIMBAD_EXCLUSION_RELEASE = "SIMBAD live database"
+CHEN_EXCLUSION_RELEASE = "VizieR J/ApJS/211/25/catalog; 2021-08-10 release"
+MAX_EXCLUSION_TEXT_LENGTH = 512
+
 SIMBAD_RESPONSE_COLUMNS: tuple[str, ...] = (
     "gaia_dr3_source_id",
     "matched_object_id",
@@ -571,12 +579,53 @@ def validate_exclusions(frame: pd.DataFrame) -> None:
     _require_numeric(frame, ("angular_distance_arcsec",), context=context)
     _require_finite(frame, ("angular_distance_arcsec",), context=context)
     _require_between(frame, "angular_distance_arcsec", 0.0, 30.0, context=context)
-    if not frame["exclusion_catalog"].isin({"SIMBAD", "Chen2014"}).all():
-        raise ValueError(f"{context}: unknown catalog")
-    if not frame["exclusion_class"].isin({"YSO", "AGN", "debris_disk"}).all():
-        raise ValueError(f"{context}: unknown exclusion class")
     if frame.duplicated(subset=list(EXCLUSION_COLUMNS)).any():
         raise ValueError(f"{context}: residual exact duplicate tuple is forbidden")
     counts = frame.groupby(["gaia_dr3_source_id", "exclusion_catalog"], dropna=False).size()
     if (counts > MAX_MATCHES_PER_SOURCE_CATALOG).any():
         raise ValueError(f"{context}: retained-match bound exceeded")
+    for column in (
+        "exclusion_catalog",
+        "exclusion_class",
+        "matched_object_id",
+        "matched_otype",
+        "catalog_release",
+    ):
+        if frame[column].isna().any():
+            raise ValueError(f"{context}: {column} must be non-empty")
+        if not frame[column].map(lambda value: isinstance(value, str)).all():
+            raise TypeError(f"{context}: {column} must contain strings")
+        values = frame[column].astype(str)
+        if (values.str.strip().str.len() == 0).any():
+            raise ValueError(f"{context}: {column} must be non-empty")
+        if (values.str.len() > MAX_EXCLUSION_TEXT_LENGTH).any():
+            raise ValueError(f"{context}: {column} exceeds the text bound")
+    if not frame["exclusion_catalog"].isin({"SIMBAD", "Chen2014"}).all():
+        raise ValueError(f"{context}: unknown catalog")
+
+    simbad = frame["exclusion_catalog"] == "SIMBAD"
+    chen = frame["exclusion_catalog"] == "Chen2014"
+    otypes = frame["matched_otype"].astype(str)
+    expected_simbad_class = pd.Series("AGN", index=frame.index)
+    expected_simbad_class.loc[otypes.isin(SIMBAD_YSO_TYPES)] = "YSO"
+    if not otypes.loc[simbad].isin(SIMBAD_YSO_TYPES | SIMBAD_AGN_TYPES).all():
+        raise ValueError(f"{context}: SIMBAD object type is not registered")
+    if not frame.loc[simbad, "exclusion_class"].eq(expected_simbad_class.loc[simbad]).all():
+        raise ValueError(f"{context}: SIMBAD object type/class mapping mismatch")
+    if not frame.loc[simbad, "catalog_release"].eq(SIMBAD_EXCLUSION_RELEASE).all():
+        raise ValueError(f"{context}: SIMBAD catalog release mismatch")
+    if not frame.loc[chen, "exclusion_class"].eq("debris_disk").all():
+        raise ValueError(f"{context}: Chen exclusion class mismatch")
+    if not frame.loc[chen, "matched_otype"].eq("debris_disk").all():
+        raise ValueError(f"{context}: Chen object type mismatch")
+    if not frame.loc[chen, "catalog_release"].eq(CHEN_EXCLUSION_RELEASE).all():
+        raise ValueError(f"{context}: Chen catalog release mismatch")
+
+    identity_columns = [
+        "gaia_dr3_source_id",
+        "exclusion_catalog",
+        "matched_object_id",
+        "matched_otype",
+    ]
+    if frame.duplicated(subset=identity_columns).any():
+        raise ValueError(f"{context}: duplicate catalog object identity is forbidden")

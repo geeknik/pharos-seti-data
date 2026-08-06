@@ -2,17 +2,75 @@
 
 from __future__ import annotations
 
+import argparse
 import copy
 import hashlib
 import subprocess
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import pandas as pd
 import pytest
 import yaml
 
-from pharos import artifacts, control_population, sources, validation
+from pharos import artifacts, calibration, cli, control_population, sources, validation
 from tests.test_control_population import _joined_sources, _valid_manifest
+
+
+def _trusted_release_for_manifest(
+    manifest_path: Path,
+    *,
+    release_id: str = "test-authorized-release",
+) -> artifacts.TrustedFinalRelease:
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    frames = {
+        name: pd.read_parquet(manifest_path.parent / descriptor["path"])
+        for name, descriptor in payload["artifacts"].items()
+    }
+
+    def trusted_artifact(name: str) -> artifacts.TrustedReleaseArtifact:
+        descriptor = payload["artifacts"][name]
+        return artifacts.TrustedReleaseArtifact(
+            path=descriptor["path"],
+            sha256=descriptor["sha256"],
+            row_count=descriptor["row_count"],
+            columns=tuple(descriptor["columns"]),
+            schema_version=descriptor["schema_version"],
+            content_sha256=artifacts.sha256_frame(frames[name]),
+        )
+
+    traces = payload["query_provenance"]
+    gaia_traces = [trace for trace in traces if trace["service"] == "Gaia TAP joined"]
+    simbad_traces = [trace for trace in traces if trace["service"] == "SIMBAD"]
+    chen_trace = next(trace for trace in traces if trace["service"] == "VizieR Chen2014")
+    exclusions = frames["exclusions"]
+    software = payload["software"]
+    return artifacts.TrustedFinalRelease(
+        release_id=release_id,
+        manifest_sha256=artifacts.sha256_file(manifest_path),
+        producer_software=(
+            software["git_commit"],
+            software["source_tree_sha256"],
+            software["uv_lock_sha256"],
+        ),
+        raw_candidates=trusted_artifact("raw_candidates"),
+        controls=trusted_artifact("controls"),
+        exclusions=trusted_artifact("exclusions"),
+        query_provenance_sha256=artifacts._trace_identity_sha256(traces),  # noqa: SLF001
+        gaia_query_hashes_sha256=artifacts.sha256_strings(
+            [trace["query_sha256"] for trace in gaia_traces]
+        ),
+        simbad_query_sha256=simbad_traces[0]["query_sha256"],
+        simbad_raw_response_rows=sum(trace["response_rows"] for trace in simbad_traces),
+        simbad_normalized_rows=int(
+            (exclusions["exclusion_catalog"] == "SIMBAD").sum()
+        ),
+        chen_query_sha256=chen_trace["query_sha256"],
+        chen_response_rows=chen_trace["response_rows"],
+        chen_normalized_rows=int(
+            (exclusions["exclusion_catalog"] == "Chen2014").sum()
+        ),
+    )
 
 
 def test_software_provenance_refuses_dirty_tracked_and_untracked_inputs(
@@ -47,11 +105,11 @@ def test_software_provenance_refuses_dirty_tracked_and_untracked_inputs(
 
     monkeypatch.setattr(sources, "fetch_quiet_negative_controls", forbid_acquisition)
     with pytest.raises(RuntimeError, match="dirty"):
-        control_population.build_quiet_negative_v012(
-            output_dir=root / "release",
-            raw_cache_path=root / "raw.parquet",
+        control_population.reproduce_failed_v012_pilot(
+            output_dir=root / control_population.FAILED_V012_OUTPUT_RELATIVE,
+            raw_cache_path=root / control_population.FAILED_V012_RAW_CACHE_RELATIVE,
             minimum_joined_rows=1,
-            generating_command="python -m pharos.cli build_quiet_negative_v012",
+            generating_command="python -m pharos.cli reproduce_failed_v012_pilot",
         )
 
 
@@ -66,6 +124,610 @@ def test_sampling_plan_is_deterministic_all_sky_and_exact_quota() -> None:
         (float(lower), float(lower + 30)) for lower in range(0, 360, 30)
     }
     assert max(item.quota for item in first) - min(item.quota for item in first) <= 1
+
+
+def test_failed_pilot_release_identity_is_not_authorized() -> None:
+    pilot_manifest_sha256 = (
+        "da275acc872318283ada59fafe6ba93613c669d0f34452dc931f0b3763aa0d8c"
+    )
+    assert all(
+        release.manifest_sha256 != pilot_manifest_sha256
+        for release in artifacts.TRUSTED_FINAL_RELEASES
+    )
+
+
+def test_fresh_current_producer_candidate_requires_registry_authorization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    reviewed = artifacts.validate_control_release_candidate(manifest_path)
+    assert reviewed["gaia_dr3_source_id"].tolist() == [1, 2]
+
+    monkeypatch.setattr(artifacts, "TRUSTED_FINAL_RELEASES", ())
+    with pytest.raises(ValueError, match="registry-authorized"):
+        artifacts.load_control_artifact(
+            manifest_path,
+            release_id="fresh-current-producer",
+        )
+
+
+def test_exact_registry_authorization_is_required_and_sufficient(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    trusted = _trusted_release_for_manifest(manifest_path)
+    monkeypatch.setattr(artifacts, "TRUSTED_FINAL_RELEASES", (trusted,))
+
+    with pytest.raises(ValueError, match="non-empty registry key"):
+        artifacts.load_control_artifact(manifest_path, release_id="")
+    with pytest.raises(ValueError, match="invalid syntax"):
+        artifacts.load_control_artifact(manifest_path, release_id="../candidate")
+    with pytest.raises(ValueError, match="registry-authorized"):
+        artifacts.load_control_artifact(manifest_path, release_id="unknown-release")
+
+    loaded = artifacts.load_control_artifact(
+        manifest_path,
+        release_id=trusted.release_id,
+    )
+    assert loaded["gaia_dr3_source_id"].tolist() == [1, 2]
+
+
+@pytest.mark.parametrize(
+    "registry",
+    [None, {}, [], object(), (None,), ({"release_id": "forged"},), (object(),)],
+)
+def test_malformed_release_registry_fails_with_controlled_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    registry: object,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    monkeypatch.setattr(artifacts, "TRUSTED_FINAL_RELEASES", registry)
+    with pytest.raises(artifacts.ReleaseRegistryError, match="release registry"):
+        artifacts.load_authorized_control_release(
+            manifest_path,
+            release_id="test-authorized-release",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("release_id", "../invalid"),
+        ("manifest_sha256", "not-a-digest"),
+        ("producer_software", None),
+        ("raw_candidates", None),
+        ("simbad_raw_response_rows", True),
+    ],
+)
+def test_malformed_typed_registry_entry_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    bad_value: object,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    trusted = _trusted_release_for_manifest(manifest_path)
+    malformed = replace(trusted, **{field: bad_value})
+    monkeypatch.setattr(artifacts, "TRUSTED_FINAL_RELEASES", (malformed,))
+    with pytest.raises(artifacts.ReleaseRegistryError, match="release registry"):
+        artifacts.load_authorized_control_release(
+            manifest_path,
+            release_id="test-authorized-release",
+        )
+
+
+def test_duplicate_release_registry_identity_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    trusted = _trusted_release_for_manifest(manifest_path)
+    monkeypatch.setattr(artifacts, "TRUSTED_FINAL_RELEASES", (trusted, trusted))
+    with pytest.raises(artifacts.ReleaseRegistryError, match="duplicate"):
+        artifacts.load_authorized_control_release(
+            manifest_path,
+            release_id=trusted.release_id,
+        )
+
+
+@pytest.mark.parametrize(
+    "registry",
+    [None, {}, [], object(), (None,), ({"artifact_sha256": "a" * 64},), (object(),)],
+)
+def test_malformed_raw_checkpoint_registry_fails_with_controlled_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    registry: object,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", registry)
+    with pytest.raises(artifacts.ReleaseRegistryError, match="raw checkpoint registry"):
+        artifacts.validate_control_manifest(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("git_commit", "invalid"),
+        ("source_tree_sha256", None),
+        ("uv_lock_sha256", "0" * 64),
+        ("artifact_sha256", object()),
+        ("manifest_sha256", "short"),
+        ("content_sha256", {}),
+        ("row_count", None),
+        ("row_count", True),
+        ("row_count", validation.MAX_RAW_CONTROL_ROWS + 1),
+    ],
+)
+def test_malformed_typed_raw_checkpoint_entry_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    bad_value: object,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    trusted = artifacts.TRUSTED_RAW_CHECKPOINTS[0]
+    malformed = replace(trusted, **{field: bad_value})
+    monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", (malformed,))
+    with pytest.raises(
+        artifacts.ReleaseRegistryError,
+        match=r"(?:raw checkpoint registry|release registry raw_entries)",
+    ):
+        artifacts.validate_control_manifest(payload)
+
+
+def test_duplicate_raw_checkpoint_entries_and_identities_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    trusted = artifacts.TRUSTED_RAW_CHECKPOINTS[0]
+    monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", (trusted, trusted))
+    with pytest.raises(artifacts.ReleaseRegistryError, match="duplicate entry"):
+        artifacts.validate_control_manifest(payload)
+
+    distinct_producer = replace(trusted, git_commit="4" * 40)
+    monkeypatch.setattr(
+        artifacts,
+        "TRUSTED_RAW_CHECKPOINTS",
+        (trusted, distinct_producer),
+    )
+    with pytest.raises(artifacts.ReleaseRegistryError, match="duplicate .* identity"):
+        artifacts.validate_control_manifest(payload)
+
+
+def test_failed_non_authorizing_manifest_cannot_enter_scientific_loader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    trusted = _trusted_release_for_manifest(manifest_path)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    payload.update(
+        {
+            "schema_version": control_population.FAILED_PILOT_SCHEMA_VERSION,
+            "status": "failed",
+            "authorization": "non_authorizing",
+            "failure_reason": "unregistered selection rules",
+        }
+    )
+    artifacts.atomic_write_yaml(payload, manifest_path)
+    monkeypatch.setattr(artifacts, "TRUSTED_FINAL_RELEASES", (trusted,))
+
+    with pytest.raises(ValueError, match="unexpected|version/status"):
+        artifacts.validate_control_release_candidate(manifest_path)
+    with pytest.raises(ValueError, match="unexpected|version/status"):
+        artifacts.load_control_artifact(
+            manifest_path,
+            release_id=trusted.release_id,
+        )
+
+
+def test_cli_exposes_only_quarantined_v012_reproduction() -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["build_quiet_negative_v012"])
+
+    args = parser.parse_args(["reproduce_failed_v012_pilot"])
+    assert args.func is cli.cmd_reproduce_failed_v012_pilot
+    assert not hasattr(args, "output_dir")
+    assert not hasattr(args, "raw_cache")
+
+
+def test_failed_v012_reproduction_rejects_non_quarantine_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(artifacts, "repository_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        artifacts,
+        "software_provenance",
+        lambda: {
+            "git_commit": "1" * 40,
+            "source_tree_sha256": "2" * 64,
+            "uv_lock_sha256": "3" * 64,
+        },
+    )
+    with pytest.raises(ValueError, match="quarantine paths"):
+        control_population.reproduce_failed_v012_pilot(
+            output_dir=tmp_path / "controls" / "candidate-release",
+            raw_cache_path=tmp_path / control_population.FAILED_V012_RAW_CACHE_RELATIVE,
+            minimum_joined_rows=55_000,
+            generating_command="python -m pharos.cli reproduce_failed_v012_pilot",
+        )
+
+
+def test_failed_v012_reproduction_emits_only_non_authorizing_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    joined = _joined_sources(2)
+    joined["galactic_l"] = [1.0, 1.0]
+    joined["galactic_b"] = [30.0, -30.0]
+    strata = [asdict(item) for item in sources.build_sampling_strata(2)]
+    cursor = 0
+    for item in strata:
+        item["collected_rows"] = item["quota"]
+        if item["quota"]:
+            cursor += item["quota"]
+            item["cursor_source_id"] = cursor
+    raw_result = sources.SourceQueryResult(
+        sources=joined,
+        query_text="",
+        query_hash="a" * 64,
+        n_sources=2,
+        gaia_rows=2,
+        selection_target_rows=2,
+        selection_strata=tuple(strata),
+        raw_input_provenance={
+            "artifact_sha256": "a" * 64,
+            "checkpoint_manifest_sha256": "b" * 64,
+            "producer_software": {
+                "git_commit": "1" * 40,
+                "source_tree_sha256": "2" * 64,
+                "uv_lock_sha256": "3" * 64,
+            },
+            "content_sha256": artifacts.sha256_frame(joined),
+        },
+    )
+    monkeypatch.setattr(artifacts, "repository_root", lambda: tmp_path)
+    monkeypatch.setattr(artifacts, "MIN_CONTROL_ROWS", 2)
+    monkeypatch.setattr(
+        artifacts,
+        "software_provenance",
+        lambda: dict(raw_result.raw_input_provenance["producer_software"]),
+    )
+    monkeypatch.setattr(
+        sources,
+        "fetch_quiet_negative_controls",
+        lambda *args, **kwargs: raw_result,
+    )
+    empty_exclusions = pd.DataFrame(columns=validation.EXCLUSION_COLUMNS)
+    monkeypatch.setattr(
+        control_population,
+        "fetch_simbad_exclusions",
+        lambda candidates: (empty_exclusions, []),
+    )
+    monkeypatch.setattr(
+        control_population,
+        "fetch_chen_exclusions",
+        lambda candidates: (empty_exclusions, []),
+    )
+    output = tmp_path / control_population.FAILED_V012_OUTPUT_RELATIVE
+    result = control_population.reproduce_failed_v012_pilot(
+        output_dir=output,
+        raw_cache_path=tmp_path / control_population.FAILED_V012_RAW_CACHE_RELATIVE,
+        minimum_joined_rows=2,
+        generating_command="python -m pharos.cli reproduce_failed_v012_pilot",
+    )
+
+    assert result.manifest_path == output / "manifest.yaml"
+    assert result.manifest["status"] == "failed"
+    assert result.manifest["authorization"] == "non_authorizing"
+    with pytest.raises(ValueError, match="unexpected|version/status"):
+        artifacts.validate_control_release_candidate(result.manifest_path)
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["run_injection_recovery", "run_fdr_report", "run_calibration"],
+)
+def test_analysis_cli_requires_explicit_release_manifest_and_identity(command: str) -> None:
+    parser = cli.build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args([command])
+
+
+@pytest.mark.parametrize("command", ["injection", "fdr", "calibration"])
+def test_analysis_cli_catches_malformed_release_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    monkeypatch.setattr(artifacts, "TRUSTED_FINAL_RELEASES", (None,))
+    output = tmp_path / "must-not-exist"
+    if command == "injection":
+        result = cli.cmd_run_injection_recovery(
+            argparse.Namespace(
+                controls_manifest=str(manifest_path),
+                controls_release_id="test-authorized-release",
+                output_dir=str(output),
+                sigmas=["5"],
+                threshold=3.0,
+                max_pool_size=2,
+                seed=0,
+            )
+        )
+    elif command == "fdr":
+        result = cli.cmd_run_fdr_report(
+            argparse.Namespace(
+                controls_manifest=str(manifest_path),
+                controls_release_id="test-authorized-release",
+                output_dir=str(output),
+                q_thresholds=["0.05"],
+                seed=0,
+            )
+        )
+    else:
+        contaminants = tmp_path / "contaminants.parquet"
+        pd.DataFrame({"gaia_dr3_source_id": [1]}).to_parquet(contaminants, index=False)
+        preregistration = tmp_path / "preregistration.md"
+        preregistration.write_text("test fixture\n", encoding="utf-8")
+        result = cli.cmd_run_calibration(
+            argparse.Namespace(
+                contaminants=str(contaminants),
+                controls_manifest=str(manifest_path),
+                controls_release_id="test-authorized-release",
+                output=str(output / "calibration.yaml"),
+                pre_registration=str(preregistration),
+                xray_dir=None,
+                seed=0,
+            )
+        )
+    assert result == 2
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("command", ["injection", "fdr", "calibration"])
+def test_analysis_cli_catches_malformed_raw_checkpoint_registry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    trusted_release = _trusted_release_for_manifest(manifest_path)
+    monkeypatch.setattr(artifacts, "TRUSTED_FINAL_RELEASES", (trusted_release,))
+    monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", (None,))
+    output = tmp_path / "must-not-exist"
+    if command == "injection":
+        result = cli.cmd_run_injection_recovery(
+            argparse.Namespace(
+                controls_manifest=str(manifest_path),
+                controls_release_id=trusted_release.release_id,
+                output_dir=str(output),
+                sigmas=["5"],
+                threshold=3.0,
+                max_pool_size=2,
+                seed=0,
+            )
+        )
+    elif command == "fdr":
+        result = cli.cmd_run_fdr_report(
+            argparse.Namespace(
+                controls_manifest=str(manifest_path),
+                controls_release_id=trusted_release.release_id,
+                output_dir=str(output),
+                q_thresholds=["0.05"],
+                seed=0,
+            )
+        )
+    else:
+        contaminants = tmp_path / "contaminants.parquet"
+        pd.DataFrame({"gaia_dr3_source_id": [1]}).to_parquet(contaminants, index=False)
+        preregistration = tmp_path / "preregistration.md"
+        preregistration.write_text("test fixture\n", encoding="utf-8")
+        result = cli.cmd_run_calibration(
+            argparse.Namespace(
+                contaminants=str(contaminants),
+                controls_manifest=str(manifest_path),
+                controls_release_id=trusted_release.release_id,
+                output=str(output / "calibration.yaml"),
+                pre_registration=str(preregistration),
+                xray_dir=None,
+                seed=0,
+            )
+        )
+    assert result == 2
+    assert not output.exists()
+
+
+def test_calibration_provenance_uses_verified_digest_after_path_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, controls_path = _valid_manifest(tmp_path, monkeypatch)
+    trusted = _trusted_release_for_manifest(manifest_path)
+    monkeypatch.setattr(artifacts, "TRUSTED_FINAL_RELEASES", (trusted,))
+    authorized = artifacts.load_authorized_control_release(
+        manifest_path,
+        release_id=trusted.release_id,
+    )
+    assert authorized.controls_sha256 == trusted.controls.sha256
+    assert authorized.controls_descriptor == trusted.controls
+    expected_controls = authorized.controls.copy(deep=True)
+
+    contaminants = tmp_path / "contaminants.parquet"
+    pd.DataFrame({"gaia_dr3_source_id": [999]}).to_parquet(contaminants, index=False)
+    preregistration = tmp_path / "preregistration.md"
+    preregistration.write_text("test fixture\n", encoding="utf-8")
+    output = tmp_path / "calibration.yaml"
+
+    def replace_after_load(
+        contaminant_frame: pd.DataFrame,
+        control_frame: pd.DataFrame,
+        *,
+        random_state: int,
+    ) -> calibration.CalibrationResult:
+        del contaminant_frame, random_state
+        pd.testing.assert_frame_equal(control_frame, expected_controls)
+        assert artifacts.sha256_frame(control_frame) == trusted.controls.content_sha256
+        controls_path.write_bytes(b"attacker replacement after authorized load")
+        return calibration.CalibrationResult(
+            betas={"blend": 1.0},
+            raw_betas={"blend": 1.0},
+            train_loss=0.1,
+            train_accuracy=1.0,
+            train_auc=1.0,
+            score_separation=1.0,
+            n_contaminants=1,
+            n_controls=len(control_frame),
+            fit_metadata={"random_state": 0},
+        )
+
+    monkeypatch.setattr(calibration, "calibrate_betas", replace_after_load)
+    result = cli.cmd_run_calibration(
+        argparse.Namespace(
+            contaminants=str(contaminants),
+            controls_manifest=str(manifest_path),
+            controls_release_id=trusted.release_id,
+            output=str(output),
+            pre_registration=str(preregistration),
+            xray_dir=None,
+            seed=0,
+        )
+    )
+    assert result == 0
+    assert artifacts.sha256_file(controls_path) != trusted.controls.sha256
+    payload = yaml.safe_load(output.read_text(encoding="utf-8"))
+    assert payload["input_fixtures"]["controls"] == {
+        "path": str(controls_path),
+        "sha256": trusted.controls.sha256,
+    }
+
+
+def test_release_loader_rejects_incomplete_simbad_trace_coverage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    simbad_indexes = [
+        index
+        for index, trace in enumerate(payload["query_provenance"])
+        if trace["service"] == "SIMBAD"
+    ]
+    del payload["query_provenance"][simbad_indexes[0]]
+    artifacts.atomic_write_yaml(payload, manifest_path)
+    with pytest.raises(ValueError, match="bind Gaia|count/order"):
+        artifacts.validate_control_release_candidate(manifest_path)
+
+
+def test_failed_pilot_release_producer_is_rejected_by_later_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    payload["software"] = {
+        "git_commit": "619dc557f2b0782f7f92dbc6ebcdc67413667020",
+        "source_tree_sha256": (
+            "acf8a344821151788e596dd4e31038c3b80501a92b969502fc795e3f04936a62"
+        ),
+        "uv_lock_sha256": (
+            "a5947dc7f96f67447ab0a2d5d412b22aa4f3ff65765819518a359dcb731bf731"
+        ),
+    }
+    artifacts.atomic_write_yaml(payload, manifest_path)
+    later_runtime = {
+        "git_commit": "9" * 40,
+        "source_tree_sha256": "8" * 64,
+        "uv_lock_sha256": "7" * 64,
+    }
+    monkeypatch.setattr(artifacts, "software_provenance", lambda: later_runtime)
+    with pytest.raises(ValueError, match="software provenance"):
+        artifacts.validate_control_release_candidate(manifest_path)
+
+
+@pytest.mark.parametrize("command", ["injection", "fdr", "calibration"])
+def test_failed_pilot_release_cannot_enter_analysis_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    def forbid_review_loader(*args: object, **kwargs: object) -> pd.DataFrame:
+        raise AssertionError("analysis command called the review-only candidate API")
+
+    monkeypatch.setattr(
+        artifacts,
+        "validate_control_release_candidate",
+        forbid_review_loader,
+    )
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    payload["software"] = {
+        "git_commit": "619dc557f2b0782f7f92dbc6ebcdc67413667020",
+        "source_tree_sha256": (
+            "acf8a344821151788e596dd4e31038c3b80501a92b969502fc795e3f04936a62"
+        ),
+        "uv_lock_sha256": (
+            "a5947dc7f96f67447ab0a2d5d412b22aa4f3ff65765819518a359dcb731bf731"
+        ),
+    }
+    artifacts.atomic_write_yaml(payload, manifest_path)
+    monkeypatch.setattr(
+        artifacts,
+        "software_provenance",
+        lambda: {
+            "git_commit": "9" * 40,
+            "source_tree_sha256": "8" * 64,
+            "uv_lock_sha256": "7" * 64,
+        },
+    )
+    output = tmp_path / "must-not-exist"
+    if command == "injection":
+        args = argparse.Namespace(
+            controls_manifest=str(manifest_path),
+            controls_release_id="failed-v0.1.2",
+            output_dir=str(output),
+            sigmas=["5"],
+            threshold=3.0,
+            max_pool_size=2,
+            seed=0,
+        )
+        result = cli.cmd_run_injection_recovery(args)
+    elif command == "fdr":
+        args = argparse.Namespace(
+            controls_manifest=str(manifest_path),
+            controls_release_id="failed-v0.1.2",
+            output_dir=str(output),
+            q_thresholds=["0.05"],
+            seed=0,
+        )
+        result = cli.cmd_run_fdr_report(args)
+    else:
+        contaminants = tmp_path / "contaminants.parquet"
+        pd.DataFrame({"gaia_dr3_source_id": [1]}).to_parquet(contaminants, index=False)
+        preregistration = tmp_path / "preregistration.md"
+        preregistration.write_text("frozen test fixture\n", encoding="utf-8")
+        args = argparse.Namespace(
+            contaminants=str(contaminants),
+            controls_manifest=str(manifest_path),
+            controls_release_id="failed-v0.1.2",
+            output=str(output / "calibration.yaml"),
+            pre_registration=str(preregistration),
+            xray_dir=None,
+            seed=0,
+        )
+        result = cli.cmd_run_calibration(args)
+    assert result == 2
+    assert not output.exists()
 
 
 def test_manifest_rejects_forged_stratum_quota_vector(
@@ -313,7 +975,7 @@ def test_artifact_loader_boundary_rejects_partial_or_forged_w4(
     artifacts.atomic_write_yaml(payload, manifest_path)
 
     with pytest.raises(ValueError, match=message):
-        artifacts.load_control_artifact(manifest_path)
+        artifacts.validate_control_release_candidate(manifest_path)
 
 
 def test_bp_rp_relational_revalidation_rejects_forged_delta() -> None:
@@ -345,7 +1007,7 @@ def test_loader_recomputes_bp_rp_medians_from_bound_parent_population(
     }
     artifacts.atomic_write_yaml(payload, manifest_path)
     with pytest.raises(ValueError, match="parent-population derivation"):
-        artifacts.load_control_artifact(manifest_path)
+        artifacts.validate_control_release_candidate(manifest_path)
 
 
 def test_release_manifest_separately_binds_historical_raw_and_release_producers(
@@ -367,6 +1029,7 @@ def test_release_manifest_separately_binds_historical_raw_and_release_producers(
         artifact_sha256=payload["raw_input_provenance"]["artifact_sha256"],
         manifest_sha256=payload["raw_input_provenance"]["checkpoint_manifest_sha256"],
         content_sha256=payload["raw_input_provenance"]["content_sha256"],
+        row_count=payload["artifacts"]["raw_candidates"]["row_count"],
     )
     monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", (trusted,))
 
@@ -414,7 +1077,7 @@ def test_exact_exclusion_dedup_then_residual_duplicate_rejection() -> None:
         "matched_object_id": "AGN-1",
         "matched_otype": "AGN",
         "angular_distance_arcsec": 1.0,
-        "catalog_release": "test",
+        "catalog_release": validation.SIMBAD_EXCLUSION_RELEASE,
     }
     duplicated = pd.DataFrame([row, row], columns=validation.EXCLUSION_COLUMNS)
     with pytest.raises(ValueError, match="exact duplicate"):
@@ -423,7 +1086,80 @@ def test_exact_exclusion_dedup_then_residual_duplicate_rejection() -> None:
     assert len(normalized) == 1
 
 
-def test_exclusion_normalization_preserves_conflicting_identity_and_is_deterministic() -> None:
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("matched_object_id", "", "must be non-empty"),
+        ("matched_otype", "Star", "object type is not registered"),
+        ("exclusion_class", "YSO", "type/class mapping mismatch"),
+        ("catalog_release", "SIMBAD forged release", "catalog release mismatch"),
+    ],
+)
+def test_simbad_exclusion_rejects_empty_relabeled_and_forged_fields(
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    row = {
+        "gaia_dr3_source_id": 1,
+        "exclusion_catalog": "SIMBAD",
+        "exclusion_class": "AGN",
+        "matched_object_id": "AGN-1",
+        "matched_otype": "AGN",
+        "angular_distance_arcsec": 1.0,
+        "catalog_release": validation.SIMBAD_EXCLUSION_RELEASE,
+    }
+    row[field] = value
+    frame = pd.DataFrame([row], columns=validation.EXCLUSION_COLUMNS)
+    with pytest.raises(ValueError, match=message):
+        validation.validate_exclusions(frame)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("exclusion_class", "AGN", "Chen exclusion class mismatch"),
+        ("matched_otype", "disk", "Chen object type mismatch"),
+        ("catalog_release", "Chen latest", "Chen catalog release mismatch"),
+    ],
+)
+def test_chen_exclusion_requires_exact_type_and_release(
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    row = {
+        "gaia_dr3_source_id": 1,
+        "exclusion_catalog": "Chen2014",
+        "exclusion_class": "debris_disk",
+        "matched_object_id": "HD 1",
+        "matched_otype": "debris_disk",
+        "angular_distance_arcsec": 1.0,
+        "catalog_release": validation.CHEN_EXCLUSION_RELEASE,
+    }
+    row[field] = value
+    frame = pd.DataFrame([row], columns=validation.EXCLUSION_COLUMNS)
+    with pytest.raises(ValueError, match=message):
+        validation.validate_exclusions(frame)
+
+
+def test_exclusion_rejects_duplicate_catalog_identity_with_changed_distance() -> None:
+    row = {
+        "gaia_dr3_source_id": 1,
+        "exclusion_catalog": "SIMBAD",
+        "exclusion_class": "AGN",
+        "matched_object_id": "AGN-1",
+        "matched_otype": "AGN",
+        "angular_distance_arcsec": 1.0,
+        "catalog_release": validation.SIMBAD_EXCLUSION_RELEASE,
+    }
+    duplicate_identity = {**row, "angular_distance_arcsec": 2.0}
+    frame = pd.DataFrame([row, duplicate_identity], columns=validation.EXCLUSION_COLUMNS)
+    with pytest.raises(ValueError, match="duplicate catalog object identity"):
+        validation.validate_exclusions(frame)
+
+
+def test_exclusion_normalization_preserves_distinct_object_types_and_is_deterministic() -> None:
     base = {
         "gaia_dr3_source_id": 7,
         "exclusion_catalog": "SIMBAD",
@@ -579,7 +1315,7 @@ def test_loader_rejects_symlink_substitution(
     controls_path.symlink_to(outside)
     try:
         with pytest.raises(ValueError, match="symlink"):
-            artifacts.load_control_artifact(manifest_path)
+            artifacts.validate_control_release_candidate(manifest_path)
     finally:
         outside.unlink(missing_ok=True)
 
@@ -719,4 +1455,46 @@ def test_manifest_rejects_provenance_substitution_and_relational_mismatch(
         software_swap["software"][field] = replacement
         artifacts.atomic_write_yaml(software_swap, manifest_path)
         with pytest.raises(ValueError, match="software provenance"):
-            artifacts.load_control_artifact(manifest_path)
+            artifacts.validate_control_release_candidate(manifest_path)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("simbad_input", "SIMBAD provenance input"),
+        ("simbad_raw_count", "raw/normalized response counts"),
+        ("chen_query", "Chen provenance query/input"),
+        ("duplicate_simbad", "reordered|count/order"),
+    ],
+)
+def test_loader_rejects_forged_external_trace_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: str,
+    message: str,
+) -> None:
+    manifest_path, _ = _valid_manifest(tmp_path, monkeypatch)
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    simbad_index = next(
+        index
+        for index, trace in enumerate(payload["query_provenance"])
+        if trace["service"] == "SIMBAD"
+    )
+    chen_index = next(
+        index
+        for index, trace in enumerate(payload["query_provenance"])
+        if trace["service"] == "VizieR Chen2014"
+    )
+    if mutation == "simbad_input":
+        payload["query_provenance"][simbad_index]["input_sha256"] = "a" * 64
+    elif mutation == "simbad_raw_count":
+        payload["query_provenance"][simbad_index]["response_rows"] = 1
+    elif mutation == "chen_query":
+        payload["query_provenance"][chen_index]["query_sha256"] = "b" * 64
+    else:
+        payload["query_provenance"].insert(
+            chen_index, copy.deepcopy(payload["query_provenance"][simbad_index])
+        )
+    artifacts.atomic_write_yaml(payload, manifest_path)
+    with pytest.raises(ValueError, match=message):
+        artifacts.validate_control_release_candidate(manifest_path)

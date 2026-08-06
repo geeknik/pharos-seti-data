@@ -1,7 +1,8 @@
-"""Build the conformant v0.1.2 quiet-negative control population.
+"""Reproduce the failed v0.1.2 quiet-negative control pilot.
 
-This module stops at the approved boundary: it creates and validates the
-control fixture, but does not fit any confounder model.
+The reproduction path is operationally quarantined: it can write only to the
+ignored failed-attempt locations, emits a failed/non-authorizing manifest, and
+cannot publish a release accepted by scientific analysis.
 """
 
 from __future__ import annotations
@@ -28,15 +29,18 @@ EXCLUSION_RADIUS_ARCSEC = 30.0
 SIMBAD_SOURCE_CHUNK = validation.MAX_NETWORK_SOURCE_CHUNK
 SIMBAD_MAXREC = SIMBAD_SOURCE_CHUNK * validation.MAX_MATCHES_PER_SOURCE_CATALOG + 1
 CHEN_CATALOG = "J/ApJS/211/25/catalog"
-CHEN_RELEASE = "VizieR J/ApJS/211/25/catalog; 2021-08-10 release"
+CHEN_RELEASE = validation.CHEN_EXCLUSION_RELEASE
+FAILED_V012_OUTPUT_RELATIVE = Path("controls/quiet_negative_v0.1.2_hardened")
+FAILED_V012_RAW_CACHE_RELATIVE = Path(
+    "controls/cache/quiet_negative_v0.1.2_hardened.raw.parquet"
+)
+FAILED_PILOT_SCHEMA_VERSION = "pharos.quiet-negative-failed-pilot.v1"
 
 # Fixed SIMBAD object-type vocabulary for the frozen YSO/AGN exclusions.
 # The query uses the full ``otypes`` relation rather than only basic.otype,
 # so secondary classifications are included as well.
-SIMBAD_YSO_TYPES: frozenset[str] = frozenset({"Y*O", "Or*", "TT*", "Ae*", "HH", "out"})
-SIMBAD_AGN_TYPES: frozenset[str] = frozenset(
-    {"AGN", "SyG", "Sy1", "Sy2", "rG", "LIN", "QSO", "Bla", "BLL"}
-)
+SIMBAD_YSO_TYPES = validation.SIMBAD_YSO_TYPES
+SIMBAD_AGN_TYPES = validation.SIMBAD_AGN_TYPES
 
 
 @dataclass(frozen=True)
@@ -178,7 +182,7 @@ def fetch_simbad_exclusions(candidates: pd.DataFrame) -> tuple[pd.DataFrame, lis
         "exclusion_class",
         np.where(out["matched_otype"].isin(SIMBAD_YSO_TYPES), "YSO", "AGN"),
     )
-    out["catalog_release"] = "SIMBAD live database"
+    out["catalog_release"] = validation.SIMBAD_EXCLUSION_RELEASE
     out = out.loc[:, validation.EXCLUSION_COLUMNS]
     # SIMBAD can return byte-identical rows from its relation joins.  The
     # remote response has already passed its stricter schema/domain and
@@ -287,9 +291,10 @@ def apply_external_exclusions(
 def normalize_exclusions(exclusions: pd.DataFrame) -> pd.DataFrame:
     """Remove exact full-tuple duplicates and return a deterministic artifact.
 
-    Rows that share an object identity but disagree in any exclusion field are
-    deliberately retained.  They represent distinct catalog evidence and must
-    remain visible to the frozen retained-match bound and downstream review.
+    Distinct SIMBAD object-type classifications for one matched object are
+    retained as separate catalog evidence. Conflicting rows for the same
+    source/catalog/object/type identity are rejected by ``validate_exclusions``
+    rather than silently normalized.
     """
     validation.validate_exact_columns(
         exclusions, validation.EXCLUSION_COLUMNS, context="unnormalized external exclusions"
@@ -306,7 +311,7 @@ def normalize_exclusions(exclusions: pd.DataFrame) -> pd.DataFrame:
     return normalized
 
 
-def build_quiet_negative_v012(
+def reproduce_failed_v012_pilot(
     *,
     output_dir: Path,
     raw_cache_path: Path,
@@ -314,13 +319,18 @@ def build_quiet_negative_v012(
     generating_command: str,
     use_raw_cache: bool = True,
 ) -> ControlBuildResult:
-    """Build, filter, atomically publish, and reload-validate the fixture."""
+    """Reproduce the failed pilot into fixed ignored quarantine paths only."""
     # Fail before any remote call when the release producer cannot be bound to
     # a clean tracked source/config/lock state.  Manifest construction repeats
     # this check immediately before publication to catch mid-run changes.
     artifacts.software_provenance()
     output_dir = artifacts.validate_repository_path(output_dir, label="output_dir")
     raw_cache_path = artifacts.validate_repository_path(raw_cache_path, label="raw_cache_path")
+    repository = artifacts.repository_root()
+    required_output = (repository / FAILED_V012_OUTPUT_RELATIVE).resolve()
+    required_cache = (repository / FAILED_V012_RAW_CACHE_RELATIVE).resolve()
+    if output_dir != required_output or raw_cache_path != required_cache:
+        raise ValueError("failed v0.1.2 reproduction may write only to quarantine paths")
     if output_dir.exists() or output_dir.is_symlink():
         raise FileExistsError("refusing to reuse or overwrite an existing release directory")
     retrieved_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -388,7 +398,7 @@ def build_quiet_negative_v012(
             exclusions, directory=staging, prefix="exclusions"
         )
         manifest_path = staging / "manifest.yaml"
-        manifest = artifacts.build_control_manifest(
+        candidate_manifest = artifacts.build_control_manifest(
             raw_candidates_path=raw_candidates_path,
             raw_candidates=raw_result.sources,
             control_path=controls_path,
@@ -411,11 +421,17 @@ def build_quiet_negative_v012(
             selection_strata=[dict(item) for item in raw_result.selection_strata],
             raw_input_provenance=dict(raw_result.raw_input_provenance),
         )
-        artifacts.validate_control_manifest(manifest)
+        manifest = {
+            **candidate_manifest,
+            "schema_version": FAILED_PILOT_SCHEMA_VERSION,
+            "status": "failed",
+            "authorization": "non_authorizing",
+            "failure_reason": (
+                "scientifically material population-selection rules were not "
+                "prospectively registered"
+            ),
+        }
         artifacts.write_exclusive_yaml(manifest, manifest_path)
-        reloaded = artifacts.load_control_artifact(manifest_path)
-        if not reloaded["gaia_dr3_source_id"].equals(controls["gaia_dr3_source_id"]):
-            raise RuntimeError("post-write artifact validation changed source identity/order")
         artifacts.install_release_directory_no_replace(staging, output_dir)
         final_manifest = output_dir / "manifest.yaml"
         return ControlBuildResult(controls, exclusions, manifest, final_manifest)

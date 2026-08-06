@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,7 @@ LOGREG_C: float = 1.0
 LOGREG_MAX_ITER: int = 1000
 LOGREG_CLASS_WEIGHT: str = "balanced"
 RANDOM_STATE: int = 0
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -209,11 +211,23 @@ def write_calibration_yaml(
     *,
     contaminants_path: Path,
     controls_path: Path,
+    controls_sha256: str,
     pre_reg_path: Path,
 ) -> None:
-    """Persist the calibration to a YAML artifact with full provenance."""
+    """Persist calibration using the registry-verified controls digest.
+
+    ``controls_path`` is display provenance only. It is never reopened here;
+    ``controls_sha256`` must be the exact digest retained by the authorized
+    release loader that produced the in-memory controls used for fitting.
+    """
     import yaml
 
+    if (
+        not isinstance(controls_sha256, str)
+        or not _SHA256_RE.fullmatch(controls_sha256)
+        or controls_sha256 == "0" * 64
+    ):
+        raise ValueError("controls_sha256 must be an exact lowercase SHA-256")
     payload = {
         "schema_version": 1,
         "spec": "pre_registration/v0.1.1_calibrated_betas_and_xray_hot_dog.md §3",
@@ -228,7 +242,7 @@ def write_calibration_yaml(
         "fit_metadata": result.fit_metadata,
         "input_fixtures": {
             "contaminants": {"path": str(contaminants_path), "sha256": _sha256(contaminants_path)},
-            "controls": {"path": str(controls_path), "sha256": _sha256(controls_path)},
+            "controls": {"path": str(controls_path), "sha256": controls_sha256},
             "pre_registration": {"path": str(pre_reg_path), "sha256": _sha256(pre_reg_path)},
         },
     }

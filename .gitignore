@@ -42,17 +42,13 @@ data/
 !controls/contaminant_confirmed/**
 !controls/contaminant_suspected/**
 !controls/contaminant_positive/**
-# Only the hardened, immutable release payload is unignored. The historical
-# v0.1.2 directory remains local evidence and is never reused.
+# Failed v0.1.2 control-population attempts remain local quarantine evidence.
+# Neither directory is a release payload; their contents must never be staged.
 controls/quiet_negative_v0.1.2/
-!controls/quiet_negative_v0.1.2_hardened/
-!controls/quiet_negative_v0.1.2_hardened/manifest.yaml
-!controls/quiet_negative_v0.1.2_hardened/raw_candidates.*.parquet
-!controls/quiet_negative_v0.1.2_hardened/quiet_negative.*.parquet
-!controls/quiet_negative_v0.1.2_hardened/exclusions.*.parquet
+controls/quiet_negative_v0.1.2_hardened/
 
-# Resumable v0.1.2 acquisition checkpoints are local working state. Only the
-# immutable controls/quiet_negative_v0.1.2 artifacts are release payloads.
+# Resumable v0.1.2 acquisition checkpoints are local quarantine state and are
+# never release payloads.
 controls/cache/quiet_negative_v0.1.2.raw.parquet
 controls/cache/quiet_negative_v0.1.2.raw.parquet.manifest.yaml
 controls/cache/quiet_negative_v0.1.2_hardened.raw.parquet

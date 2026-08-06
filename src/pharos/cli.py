@@ -1,11 +1,8 @@
 """Command-line entry points for Pharos data and benchmark workflows.
 
-The conformant v0.1.2 control-population command is:
-
-    python -m pharos.cli build_quiet_negative_v012 \\
-        --output-dir controls/quiet_negative_v0.1.2_hardened \\
-        --raw-cache controls/cache/quiet_negative_v0.1.2_hardened.raw.parquet \\
-        --minimum-joined 55000
+There is no authorized production control-population build command. The only
+v0.1.2 acquisition path is an explicitly named failed-pilot reproduction that
+writes a failed/non-authorizing manifest to fixed ignored quarantine paths.
 
 The historical target-fetch command is:
 
@@ -103,34 +100,24 @@ def _resolve_repository_relative_path(value: str, *, label: str) -> tuple[Path, 
     return resolved, relative.as_posix()
 
 
-def cmd_build_quiet_negative_v012(args: argparse.Namespace) -> int:
-    """Build the conformant v0.1.2 fixture without fitting a model."""
-    try:
-        output_dir, output_arg = _resolve_repository_relative_path(
-            args.output_dir, label="output_dir"
-        )
-        raw_cache, raw_cache_arg = _resolve_repository_relative_path(
-            args.raw_cache, label="raw_cache"
-        )
-    except ValueError as exc:
-        logger.error("invalid path argument: %s", exc)
-        return 2
+def cmd_reproduce_failed_v012_pilot(args: argparse.Namespace) -> int:
+    """Reproduce the failed pilot in its fixed ignored quarantine paths."""
+    output_arg = control_population.FAILED_V012_OUTPUT_RELATIVE.as_posix()
+    raw_cache_arg = control_population.FAILED_V012_RAW_CACHE_RELATIVE.as_posix()
+    output_dir, _ = _resolve_repository_relative_path(output_arg, label="output_dir")
+    raw_cache, _ = _resolve_repository_relative_path(raw_cache_arg, label="raw_cache")
     command_parts = [
         "python",
         "-m",
         "pharos.cli",
-        "build_quiet_negative_v012",
-        "--output-dir",
-        output_arg,
-        "--raw-cache",
-        raw_cache_arg,
+        "reproduce_failed_v012_pilot",
         "--minimum-joined",
         str(args.minimum_joined),
     ]
     if args.force_refresh:
         command_parts.append("--force-refresh")
     generating_command = shlex.join(command_parts)
-    result = control_population.build_quiet_negative_v012(
+    result = control_population.reproduce_failed_v012_pilot(
         output_dir=output_dir,
         raw_cache_path=raw_cache,
         minimum_joined_rows=args.minimum_joined,
@@ -138,12 +125,14 @@ def cmd_build_quiet_negative_v012(args: argparse.Namespace) -> int:
         use_raw_cache=not args.force_refresh,
     )
     logger.info(
-        "v0.1.2 quiet-negative artifact validated: rows=%d exclusions=%d manifest=%s",
+        "failed v0.1.2 pilot reproduced in quarantine: rows=%d exclusions=%d manifest=%s",
         len(result.controls),
         len(result.exclusions),
         result.manifest_path,
     )
-    print(f"validated rows: {len(result.controls)}")
+    print(f"quarantined rows: {len(result.controls)}")
+    print("status: failed")
+    print("authorization: non_authorizing")
     print(f"manifest: {result.manifest_path.relative_to(Path(__file__).resolve().parents[2])}")
     return 0
 
@@ -173,11 +162,16 @@ def cmd_run_injection_recovery(args: argparse.Namespace) -> int:
         logger.error("controls manifest not found: %s", controls_manifest_path)
         return 1
     try:
-        controls = artifacts.load_control_artifact(controls_manifest_path)
+        release = artifacts.load_authorized_control_release(
+            controls_manifest_path,
+            release_id=args.controls_release_id,
+        )
     except (FileNotFoundError, TypeError, ValueError) as exc:
         logger.error("refusing nonconformant controls: %s", exc)
         return 2
-    controls = ir_sed.add_stratification_bins(ir_sed.add_color_indices(controls))
+    controls = ir_sed.add_stratification_bins(
+        ir_sed.add_color_indices(release.controls)
+    )
 
     result = injection.run_injection_recovery(
         controls,
@@ -218,18 +212,17 @@ def cmd_run_calibration(args: argparse.Namespace) -> int:
             logger.error("missing %s fixture: %s", label, path)
             return 1
 
-    contam_df = pd.read_parquet(contaminants_path)
     try:
-        controls_df = artifacts.load_control_artifact(controls_manifest_path)
+        release = artifacts.load_authorized_control_release(
+            controls_manifest_path,
+            release_id=args.controls_release_id,
+        )
     except (FileNotFoundError, TypeError, ValueError) as exc:
         logger.error("refusing nonconformant controls: %s", exc)
         return 2
-    controls_path = (
-        controls_manifest_path.parent
-        / yaml.safe_load(controls_manifest_path.read_text(encoding="utf-8"))["artifacts"][
-            "controls"
-        ]["path"]
-    )
+    contam_df = pd.read_parquet(contaminants_path)
+    controls_df = release.controls
+    controls_path = release.controls_path
 
     # Sources that survive the X-ray cross-match are augmented with the
     # xray_any_detection / xray_coverage_count columns. When the
@@ -248,6 +241,7 @@ def cmd_run_calibration(args: argparse.Namespace) -> int:
         output_path=output_path,
         contaminants_path=contaminants_path,
         controls_path=controls_path,
+        controls_sha256=release.controls_sha256,
         pre_reg_path=pre_reg_path,
     )
     print(
@@ -317,11 +311,16 @@ def cmd_run_fdr_report(args: argparse.Namespace) -> int:
         logger.error("controls manifest not found: %s", controls_manifest_path)
         return 1
     try:
-        controls = artifacts.load_control_artifact(controls_manifest_path)
+        release = artifacts.load_authorized_control_release(
+            controls_manifest_path,
+            release_id=args.controls_release_id,
+        )
     except (FileNotFoundError, TypeError, ValueError) as exc:
         logger.error("refusing nonconformant controls: %s", exc)
         return 2
-    controls = ir_sed.add_stratification_bins(ir_sed.add_color_indices(controls))
+    controls = ir_sed.add_stratification_bins(
+        ir_sed.add_color_indices(release.controls)
+    )
 
     result = fdr_report.run_fdr_report(
         controls,
@@ -395,21 +394,11 @@ def build_parser() -> argparse.ArgumentParser:
     qn.set_defaults(func=cmd_fetch_quiet_negative)
 
     qn_v012 = subparsers.add_parser(
-        "build_quiet_negative_v012",
+        "reproduce_failed_v012_pilot",
         help=(
-            "Build the conformant v0.1.2 quiet-negative fixture with BP/RP, "
-            "SIMBAD, Chen, schema, provenance, and atomic-write gates."
+            "Reproduce the failed v0.1.2 pilot in fixed ignored quarantine paths; "
+            "the output is non-authorizing and cannot enter analysis."
         ),
-    )
-    qn_v012.add_argument(
-        "--output-dir",
-        default="controls/quiet_negative_v0.1.2_hardened",
-        help="Repository-relative output directory for immutable parquets + manifest.",
-    )
-    qn_v012.add_argument(
-        "--raw-cache",
-        default="controls/cache/quiet_negative_v0.1.2_hardened.raw.parquet",
-        help="Repository-relative raw joined-candidate cache.",
     )
     qn_v012.add_argument(
         "--minimum-joined",
@@ -418,7 +407,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum joined rows before BP/RP and external exclusions (default 55000).",
     )
     qn_v012.add_argument("--force-refresh", action="store_true")
-    qn_v012.set_defaults(func=cmd_build_quiet_negative_v012)
+    qn_v012.set_defaults(func=cmd_reproduce_failed_v012_pilot)
 
     inj = subparsers.add_parser(
         "run_injection_recovery",
@@ -426,8 +415,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inj.add_argument(
         "--controls-manifest",
-        default="controls/quiet_negative_v0.1.2_hardened/manifest.yaml",
-        help="Path to an exact-schema validated v0.1.2 control manifest.",
+        required=True,
+        help="Path to the manifest named by the authorized release registry entry.",
+    )
+    inj.add_argument(
+        "--controls-release-id",
+        required=True,
+        help="Explicit release identity from the immutable authorization registry.",
     )
     inj.add_argument(
         "--output-dir",
@@ -456,8 +450,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fdr.add_argument(
         "--controls-manifest",
-        default="controls/quiet_negative_v0.1.2_hardened/manifest.yaml",
-        help="Path to an exact-schema validated v0.1.2 control manifest.",
+        required=True,
+        help="Path to the manifest named by the authorized release registry entry.",
+    )
+    fdr.add_argument(
+        "--controls-release-id",
+        required=True,
+        help="Explicit release identity from the immutable authorization registry.",
     )
     fdr.add_argument(
         "--output-dir",
@@ -524,8 +523,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cal.add_argument(
         "--controls-manifest",
-        default="controls/quiet_negative_v0.1.2_hardened/manifest.yaml",
-        help="Path to an exact-schema validated v0.1.2 control manifest.",
+        required=True,
+        help="Path to the manifest named by the authorized release registry entry.",
+    )
+    cal.add_argument(
+        "--controls-release-id",
+        required=True,
+        help="Explicit release identity from the immutable authorization registry.",
     )
     cal.add_argument(
         "--xray-dir",

@@ -16,7 +16,8 @@ This repository contains the methodology, scoring code, control populations, and
 |---|---|---|
 | v0.1.0 | IR / Astrometric Confounder Benchmark | Released pilot; post-release conformance gaps documented |
 | v0.1.1 | Global β calibration + X-ray attenuation | Failed registered attempt; did not ship |
-| v0.1.2 | Subtype-aware confounders + X-ray evidence | Pre-registration frozen; conformant control builder implemented; model fit pending |
+| v0.1.2 | Subtype-aware confounders + X-ray evidence | Hardened control pilot failed scientific conformance; artifacts quarantined; did not ship |
+| v0.1.3 | Hardened quiet-negative control population | Prospective draft only; not frozen; acquisition prohibited |
 | v0.2 | Time-domain integration (TESS, Kepler, ZTF) | Not started |
 | v0.3 | Radio coverage (Breakthrough Listen, COSMIC) | Not started |
 | v0.4 | Spectral residual integration (HIRES, HARPS, LAMOST) | Not started |
@@ -24,26 +25,19 @@ This repository contains the methodology, scoring code, control populations, and
 
 v0.1.0 passed its Hephaistos classification, synthetic-injection, and held-out-null FDR checks. A post-release audit also found that it did **not** satisfy every frozen release requirement: the quiet-negative population was smaller than registered, registered exclusions were not fully applied, and several promised derived artifacts were absent. Treat v0.1.0 as a pilot benchmark, not a complete catalog release. See [`docs/release_manifest_v0.1.0.md`](docs/release_manifest_v0.1.0.md) for the exact payload and conformance record.
 
-The failed v0.1.1 attempt is preserved under [`pre_registration/failed_attempts/`](pre_registration/failed_attempts/). Its fitted weights and X-ray attenuation rule are not active. The superseding v0.1.2 rules are frozen in [`pre_registration/v0.1.2_subtype_confounders_and_xray_evidence.md`](pre_registration/v0.1.2_subtype_confounders_and_xray_evidence.md).
+The failed v0.1.1 attempt is preserved under [`pre_registration/failed_attempts/`](pre_registration/failed_attempts/). Its fitted weights and X-ray attenuation rule are not active. The later v0.1.2 hardened control-population pilot also **did not ship**: it used scientifically material population-selection rules that were not prospectively registered. Its data and manifests remain quarantined and must not be used for fitting, calibration, ranking, or release. See the exact [v0.1.2 non-release record](pre_registration/failed_attempts/v0.1.2_hardened_control_population.md).
 
-### Build the v0.1.2 quiet-negative fixture
+The prospective replacement is [v0.1.3](pre_registration/v0.1.3_control_population.md). It is currently a draft, not a frozen registration or build authorization. No v0.1.3 catalog query, acquisition, checkpoint, exclusion request, or model operation may run until its reviewed bytes are recorded in `pre_registration/FROZEN.md` and committed by the procedure in that document.
 
-The first v0.1.2 implementation slice builds the registered control population only; it does not fit or activate a model:
+### Control-population execution status
 
-```bash
-python -m pharos.cli -v build_quiet_negative_v012 \
-  --output-dir controls/quiet_negative_v0.1.2_hardened \
-  --raw-cache controls/cache/quiet_negative_v0.1.2_hardened.raw.parquet \
-  --minimum-joined 55000
-```
-
-Remote requests are capped at 500 source positions. Responses must match exact schemas and pass coordinate, identifier, numeric-bound, and duplicate checks before use. The builder applies the magnitude-binned BP/RP excess-factor cut and 30-arcsecond SIMBAD YSO/AGN and Chen debris-disk exclusions. Acquisition checkpoints are atomic, hash-validated local working state. A final fixture is published only when at least 50,000 controls survive, and calibration/FDR commands refuse legacy parquet files without the exact v0.1.2 manifest.
+There is currently no authorized control-population build command. The old v0.1.2 command would reproduce a quarantined failed pilot, not a release, and is intentionally not documented as an executable workflow. After v0.1.3 is approved and frozen, implementation and fresh acquisition must follow its candidate, independent-review, review-evidence-commit, and registry-commit sequence exactly. Pilot rows, cursors, response tables, and allow-list entries are prohibited inputs.
 
 ## Repository Layout
 
 ```
 manuscript.md                — methodology and architecture
-pre_registration/            — frozen scoring rules, fixed before any candidate data is queried
+pre_registration/            — prospective drafts, frozen rules, and failed-attempt records
 src/pharos/                  — Python package (scoring code)
 controls/                    — calibration_positive, contaminant_confirmed,
                                contaminant_suspected, quiet_negative, synthetic_injection

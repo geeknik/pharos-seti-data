@@ -131,9 +131,44 @@ def _valid_manifest(
                 artifact_sha256=raw_input_provenance["artifact_sha256"],
                 manifest_sha256=raw_input_provenance["checkpoint_manifest_sha256"],
                 content_sha256=raw_input_provenance["content_sha256"],
+                row_count=len(joined),
             ),
         ),
     )
+    gaia_traces = []
+    for index, item in enumerate(strata[:2]):
+        stratum = sources.SamplingStratum(
+            stratum_id=item["stratum_id"],
+            longitude_min_deg=item["longitude_min_deg"],
+            longitude_max_deg=item["longitude_max_deg"],
+            hemisphere=item["hemisphere"],
+            quota=item["quota"],
+        )
+        query = sources.build_quiet_negative_joined_adql(1, stratum=stratum)
+        digest = hashlib.sha256(query.encode("utf-8")).hexdigest()
+        page = joined.iloc[index : index + 1].reset_index(drop=True)
+        gaia_traces.append(
+            {
+                "service": "Gaia TAP joined",
+                "endpoint": artifacts.GAIA_ENDPOINT,
+                "query_sha256": digest,
+                "input_sha256": digest,
+                "response_sha256": artifacts.sha256_frame(page),
+                "response_rows": 1,
+                "requested_at_utc": f"2026-08-05T19:59:0{index * 2}Z",
+                "received_at_utc": f"2026-08-05T19:59:0{index * 2 + 1}Z",
+            }
+        )
+    simbad_query = control_population._simbad_query_text()  # noqa: SLF001
+    simbad_query_hash = hashlib.sha256(simbad_query.encode("utf-8")).hexdigest()
+    simbad_input_hash = artifacts.sha256_frame(
+        controls.loc[:, ["gaia_dr3_source_id", "ra", "dec"]]
+    )
+    chen_descriptor = (
+        f"Vizier:{control_population.CHEN_CATALOG}:"
+        f"columns=Name,_RA,_DE:row_limit={validation.MAX_CLI_SOURCE_IDS}"
+    )
+    chen_query_hash = hashlib.sha256(chen_descriptor.encode("utf-8")).hexdigest()
     manifest = artifacts.build_control_manifest(
         raw_candidates_path=raw_candidates_path,
         raw_candidates=joined,
@@ -142,37 +177,28 @@ def _valid_manifest(
         exclusions_path=exclusions_path,
         exclusions=exclusions,
         retrieved_at_utc="2026-08-05T20:00:00Z",
-        generating_command="python -m pharos.cli build_quiet_negative_v012",
-        query_provenance=[
-            {
-                "service": "Gaia TAP joined",
-                "endpoint": artifacts.GAIA_ENDPOINT,
-                "query_sha256": query_hash,
-                "input_sha256": query_hash,
-                "response_sha256": query_hash,
-                "response_rows": 2,
-                "requested_at_utc": "2026-08-05T19:59:00Z",
-                "received_at_utc": "2026-08-05T20:00:00Z",
-            },
+        generating_command="python -m pharos.cli reproduce_failed_v012_pilot",
+        query_provenance=gaia_traces
+        + [
             {
                 "service": "SIMBAD",
                 "endpoint": artifacts.SIMBAD_ENDPOINT,
-                "query_sha256": query_hash,
-                "input_sha256": query_hash,
+                "query_sha256": simbad_query_hash,
+                "input_sha256": simbad_input_hash,
                 "response_sha256": query_hash,
                 "response_rows": 0,
-                "requested_at_utc": "2026-08-05T20:00:00Z",
-                "received_at_utc": "2026-08-05T20:00:01Z",
+                "requested_at_utc": "2026-08-05T19:59:04Z",
+                "received_at_utc": "2026-08-05T19:59:05Z",
             },
             {
                 "service": "VizieR Chen2014",
                 "endpoint": artifacts.VIZIER_ENDPOINT,
-                "query_sha256": query_hash,
-                "input_sha256": query_hash,
+                "query_sha256": chen_query_hash,
+                "input_sha256": chen_query_hash,
                 "response_sha256": query_hash,
                 "response_rows": 0,
-                "requested_at_utc": "2026-08-05T20:00:01Z",
-                "received_at_utc": "2026-08-05T20:00:02Z",
+                "requested_at_utc": "2026-08-05T19:59:06Z",
+                "received_at_utc": "2026-08-05T19:59:07Z",
             },
         ],
         filter_counts={
@@ -322,19 +348,19 @@ def test_conformant_artifact_round_trip_and_hash_tamper_rejection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     manifest_path, controls_path = _valid_manifest(tmp_path, monkeypatch)
-    loaded = artifacts.load_control_artifact(manifest_path)
+    loaded = artifacts.validate_control_release_candidate(manifest_path)
     assert loaded["gaia_dr3_source_id"].tolist() == [1, 2]
     with controls_path.open("ab") as handle:
         handle.write(b"tamper")
     with pytest.raises(ValueError, match="SHA-256"):
-        artifacts.load_control_artifact(manifest_path)
+        artifacts.validate_control_release_candidate(manifest_path)
 
 
 def test_legacy_parquet_without_manifest_is_refused(tmp_path: Path) -> None:
     legacy = tmp_path / "quiet_negative.parquet"
     _joined_sources(1).to_parquet(legacy, index=False)
     with pytest.raises(FileNotFoundError, match="manifest"):
-        artifacts.load_control_artifact(tmp_path / "manifest.yaml")
+        artifacts.validate_control_release_candidate(tmp_path / "manifest.yaml")
 
 
 def test_raw_checkpoint_round_trip_and_legacy_refusal(
@@ -370,7 +396,7 @@ def test_raw_checkpoint_round_trip_and_legacy_refusal(
         ],
         gaia_rows=2,
         retrieved_at_utc="2026-08-05T20:00:00Z",
-        generating_command="python -m pharos.cli build_quiet_negative_v012",
+        generating_command="python -m pharos.cli reproduce_failed_v012_pilot",
         selection_target_rows=2,
         selection_strata=strata,
     )
@@ -437,7 +463,7 @@ def test_approved_historical_raw_producer_is_reusable_and_remains_attributed(
         ],
         gaia_rows=2,
         retrieved_at_utc="2026-08-05T20:00:00Z",
-        generating_command="python -m pharos.cli build_quiet_negative_v012",
+        generating_command="python -m pharos.cli reproduce_failed_v012_pilot",
         selection_target_rows=2,
         selection_strata=strata,
     )
@@ -448,6 +474,7 @@ def test_approved_historical_raw_producer_is_reusable_and_remains_attributed(
         artifact_sha256=artifacts.sha256_file(cache),
         manifest_sha256=artifacts.sha256_file(manifest_path),
         content_sha256=artifacts.sha256_frame(raw),
+        row_count=len(raw),
     )
     monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", (trusted,))
     release_producer = {
@@ -478,22 +505,83 @@ def test_approved_historical_raw_producer_is_reusable_and_remains_attributed(
     }
 
 
-def test_registered_live_checkpoint_identity_is_exact() -> None:
-    trusted = artifacts.TRUSTED_RAW_CHECKPOINTS[0]
-    assert trusted.producer_software == {
-        "git_commit": "a0e99b7d1e0300d153d164398239cae22663e69d",
-        "source_tree_sha256": "186db27ebe7aa3a2ac419ede19c1c244d66fd4f0d68325b3422edf40524bba46",
-        "uv_lock_sha256": "a5947dc7f96f67447ab0a2d5d412b22aa4f3ff65765819518a359dcb731bf731",
+def test_failed_pilot_checkpoint_identity_is_not_authorized() -> None:
+    pilot_hashes = {
+        "841bc68c0e22218070caf77bb7454ee72fc3c66a1b71f5465525d779c0b7f840",
+        "ba129cce109db2e49cc5a00424d4c4e7dbaa878ede149d9c5eee0ed4a25e8fd6",
+        "789754d255060f2e4e37b60b9c1e89d9551ed75bebaf1f9c7f64d80d989fb8e8",
     }
-    assert trusted.artifact_sha256 == (
-        "841bc68c0e22218070caf77bb7454ee72fc3c66a1b71f5465525d779c0b7f840"
+    authorized_hashes = {
+        value
+        for trusted in artifacts.TRUSTED_RAW_CHECKPOINTS
+        for value in (
+            trusted.artifact_sha256,
+            trusted.manifest_sha256,
+            trusted.content_sha256,
+        )
+    }
+    assert pilot_hashes.isdisjoint(authorized_hashes)
+
+
+def test_failed_pilot_checkpoint_producer_is_rejected_by_later_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = _joined_sources(2)
+    raw["galactic_l"] = [1.0, 1.0]
+    raw["galactic_b"] = [30.0, -30.0]
+    cache = tmp_path / "pilot.raw.parquet"
+    query_hash = hashlib.sha256(b"joined query").hexdigest()
+    strata = [asdict(item) for item in sources.build_sampling_strata(2)]
+    cursor = 0
+    for item in strata:
+        item["collected_rows"] = item["quota"]
+        if item["quota"]:
+            cursor += item["quota"]
+            item["cursor_source_id"] = cursor
+    pilot_producer = {
+        "git_commit": "a0e99b7d1e0300d153d164398239cae22663e69d",
+        "source_tree_sha256": (
+            "186db27ebe7aa3a2ac419ede19c1c244d66fd4f0d68325b3422edf40524bba46"
+        ),
+        "uv_lock_sha256": (
+            "a5947dc7f96f67447ab0a2d5d412b22aa4f3ff65765819518a359dcb731bf731"
+        ),
+    }
+    monkeypatch.setattr(artifacts, "software_provenance", lambda: pilot_producer)
+    artifacts.write_raw_checkpoint(
+        cache_path=cache,
+        frame=raw,
+        query_traces=[
+            {
+                "service": "Gaia TAP joined",
+                "endpoint": artifacts.GAIA_ENDPOINT,
+                "query_sha256": query_hash,
+                "input_sha256": query_hash,
+                "response_sha256": artifacts.sha256_frame(raw),
+                "response_rows": 2,
+                "requested_at_utc": "2026-08-05T19:59:00Z",
+                "received_at_utc": "2026-08-05T20:00:00Z",
+            }
+        ],
+        gaia_rows=2,
+        retrieved_at_utc="2026-08-05T20:00:00Z",
+        generating_command="python -m pharos.cli reproduce_failed_v012_pilot",
+        selection_target_rows=2,
+        selection_strata=strata,
     )
-    assert trusted.manifest_sha256 == (
-        "ba129cce109db2e49cc5a00424d4c4e7dbaa878ede149d9c5eee0ed4a25e8fd6"
+    monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", ())
+    monkeypatch.setattr(
+        artifacts,
+        "software_provenance",
+        lambda: {
+            "git_commit": "9" * 40,
+            "source_tree_sha256": "8" * 64,
+            "uv_lock_sha256": "7" * 64,
+        },
     )
-    assert trusted.content_sha256 == (
-        "789754d255060f2e4e37b60b9c1e89d9551ed75bebaf1f9c7f64d80d989fb8e8"
-    )
+
+    with pytest.raises(ValueError, match="not an approved checkpoint"):
+        artifacts.load_raw_checkpoint(cache)
 
 
 @pytest.mark.parametrize(("column", "value"), [("pmra", 123.0), ("ra", 42.0)])
@@ -547,7 +635,7 @@ def test_historical_producer_cannot_self_sign_altered_checkpoint_rows(
         ],
         gaia_rows=2,
         retrieved_at_utc="2026-08-05T20:00:00Z",
-        generating_command="python -m pharos.cli build_quiet_negative_v012",
+        generating_command="python -m pharos.cli reproduce_failed_v012_pilot",
         selection_target_rows=2,
         selection_strata=strata,
     )
@@ -558,6 +646,7 @@ def test_historical_producer_cannot_self_sign_altered_checkpoint_rows(
         artifact_sha256=artifacts.sha256_file(cache),
         manifest_sha256=artifacts.sha256_file(manifest_path),
         content_sha256=artifacts.sha256_frame(raw),
+        row_count=len(raw),
     )
     monkeypatch.setattr(artifacts, "TRUSTED_RAW_CHECKPOINTS", (trusted,))
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
@@ -82,15 +83,32 @@ def _valid_manifest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Path, Path]:
     monkeypatch.setattr(artifacts, "MIN_CONTROL_ROWS", 2)
-    controls = control_population.apply_bp_rp_excess_cut(_joined_sources(2))
+    joined = _joined_sources(2)
+    joined["galactic_l"] = [1.0, 1.0]
+    joined["galactic_b"] = [30.0, -30.0]
+    controls = control_population.apply_bp_rp_excess_cut(joined)
     exclusions = pd.DataFrame(columns=validation.EXCLUSION_COLUMNS)
-    controls_path = tmp_path / "quiet.parquet"
-    exclusions_path = tmp_path / "exclusions.parquet"
+    raw_candidates_path = artifacts.write_content_addressed_parquet(
+        joined, directory=tmp_path, prefix="raw_candidates"
+    )
+    controls_path = artifacts.write_content_addressed_parquet(
+        controls, directory=tmp_path, prefix="quiet_negative"
+    )
+    exclusions_path = artifacts.write_content_addressed_parquet(
+        exclusions, directory=tmp_path, prefix="exclusions"
+    )
     manifest_path = tmp_path / "manifest.yaml"
-    artifacts.atomic_write_parquet(controls, controls_path)
-    artifacts.atomic_write_parquet(exclusions, exclusions_path)
     query_hash = hashlib.sha256(b"query").hexdigest()
+    strata = [asdict(item) for item in sources.build_sampling_strata(2)]
+    cursor = 0
+    for item in strata:
+        item["collected_rows"] = item["quota"]
+        if item["quota"]:
+            cursor += item["quota"]
+            item["cursor_source_id"] = cursor
     manifest = artifacts.build_control_manifest(
+        raw_candidates_path=raw_candidates_path,
+        raw_candidates=joined,
         control_path=controls_path,
         controls=controls,
         exclusions_path=exclusions_path,
@@ -99,11 +117,35 @@ def _valid_manifest(
         generating_command="python -m pharos.cli build_quiet_negative_v012",
         query_provenance=[
             {
-                "service": "test",
-                "request_count": 1,
+                "service": "Gaia TAP joined",
+                "endpoint": artifacts.GAIA_ENDPOINT,
                 "query_sha256": query_hash,
+                "input_sha256": query_hash,
+                "response_sha256": query_hash,
                 "response_rows": 2,
-            }
+                "requested_at_utc": "2026-08-05T19:59:00Z",
+                "received_at_utc": "2026-08-05T20:00:00Z",
+            },
+            {
+                "service": "SIMBAD",
+                "endpoint": artifacts.SIMBAD_ENDPOINT,
+                "query_sha256": query_hash,
+                "input_sha256": query_hash,
+                "response_sha256": query_hash,
+                "response_rows": 0,
+                "requested_at_utc": "2026-08-05T20:00:00Z",
+                "received_at_utc": "2026-08-05T20:00:01Z",
+            },
+            {
+                "service": "VizieR Chen2014",
+                "endpoint": artifacts.VIZIER_ENDPOINT,
+                "query_sha256": query_hash,
+                "input_sha256": query_hash,
+                "response_sha256": query_hash,
+                "response_rows": 0,
+                "requested_at_utc": "2026-08-05T20:00:01Z",
+                "received_at_utc": "2026-08-05T20:00:02Z",
+            },
         ],
         filter_counts={
             "gaia_rows": 2,
@@ -111,8 +153,11 @@ def _valid_manifest(
             "after_bp_rp_rows": 2,
             "simbad_excluded_sources": 0,
             "chen_excluded_sources": 0,
+            "excluded_unique_sources": 0,
             "final_rows": 2,
         },
+        selection_target_rows=2,
+        selection_strata=strata,
     )
     artifacts.atomic_write_yaml(manifest, manifest_path)
     return manifest_path, controls_path
@@ -157,9 +202,7 @@ def test_allwise_and_tmass_live_shapes_validate_with_optional_values() -> None:
     allwise.loc[0, ["w4mpro", "w4mpro_error", "w4snr"]] = np.nan
     validation.validate_allwise_response(allwise, requested_ids=ids)
     tmass = joined.loc[:, validation.TMASS_RESPONSE_COLUMNS].copy()
-    tmass.loc[0, ["tmass_j_m", "tmass_j_msigcom", "tmass_h_m", "tmass_h_msigcom"]] = (
-        np.nan
-    )
+    tmass.loc[0, ["tmass_j_m", "tmass_j_msigcom", "tmass_h_m", "tmass_h_msigcom"]] = np.nan
     validation.validate_tmass_response(tmass, requested_ids=ids)
 
 
@@ -269,26 +312,56 @@ def test_legacy_parquet_without_manifest_is_refused(tmp_path: Path) -> None:
 
 def test_raw_checkpoint_round_trip_and_legacy_refusal(tmp_path: Path) -> None:
     raw = _joined_sources(2)
+    raw["galactic_l"] = [1.0, 1.0]
+    raw["galactic_b"] = [30.0, -30.0]
     cache = tmp_path / "raw.parquet"
     query_hash = hashlib.sha256(b"joined query").hexdigest()
+    strata = [asdict(item) for item in sources.build_sampling_strata(2)]
+    cursor = 0
+    for item in strata:
+        item["collected_rows"] = item["quota"]
+        if item["quota"]:
+            cursor += item["quota"]
+            item["cursor_source_id"] = cursor
     manifest_path = artifacts.write_raw_checkpoint(
         cache_path=cache,
         frame=raw,
         query_traces=[
             {
                 "service": "Gaia TAP joined",
+                "endpoint": artifacts.GAIA_ENDPOINT,
                 "query_sha256": query_hash,
+                "input_sha256": query_hash,
+                "response_sha256": artifacts.sha256_frame(raw),
                 "response_rows": 2,
+                "requested_at_utc": "2026-08-05T19:59:00Z",
+                "received_at_utc": "2026-08-05T20:00:00Z",
             }
         ],
         gaia_rows=2,
         retrieved_at_utc="2026-08-05T20:00:00Z",
         generating_command="python -m pharos.cli build_quiet_negative_v012",
+        selection_target_rows=2,
+        selection_strata=strata,
     )
     loaded, manifest = artifacts.load_raw_checkpoint(cache)
     assert loaded["gaia_dr3_source_id"].tolist() == [1, 2]
-    assert manifest["cursor_source_id"] == 2
+    assert sum(item["collected_rows"] for item in manifest["selection_strata"]) == 2
     assert manifest_path == artifacts.raw_manifest_path(cache)
+
+    import yaml
+
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    for field, replacement in (
+        ("git_commit", "0" * 40),
+        ("source_tree_sha256", "0" * 64),
+        ("uv_lock_sha256", "0" * 64),
+    ):
+        substituted = copy.deepcopy(payload)
+        substituted["software"][field] = replacement
+        artifacts.atomic_write_yaml(substituted, manifest_path)
+        with pytest.raises(ValueError, match="software provenance"):
+            artifacts.load_raw_checkpoint(cache)
 
     manifest_path.unlink()
     with pytest.raises(RuntimeError, match="legacy, incomplete, or invalid"):

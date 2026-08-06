@@ -88,6 +88,12 @@ class TestBuildQuietNegativeSplitQueries:
             assert str(sid) in query
         assert sources.ALLWISE_XMATCH_TABLE in query
         assert sources.ALLWISE_PHOTO_TABLE in query
+        assert "aw.w1mpro_error > 0" in query
+        assert "aw.w2mpro_error > 0" in query
+        assert "aw.w3mpro_error > 0" in query
+        assert "aw.w1mpro_error <= 0.217140" in query
+        assert "aw.w2mpro_error <= 0.217140" in query
+        assert "aw.w3mpro_error <= 0.361900" in query
 
     def test_tmass_step_filters_by_ids(self) -> None:
         ids = [3496509309189181184]
@@ -137,6 +143,12 @@ class TestBuildQuietNegativeJoinedPages:
         assert "ORDER BY gs.source_id" in query
         assert "awbn.number_of_neighbours = 1" in query
         assert "tm.ks_m IS NOT NULL" in query
+        assert "aw.w1mpro_error > 0" in query
+        assert "aw.w2mpro_error > 0" in query
+        assert "aw.w3mpro_error > 0" in query
+        assert "aw.w1mpro_error <= 0.217140" in query
+        assert "aw.w2mpro_error <= 0.217140" in query
+        assert "aw.w3mpro_error <= 0.361900" in query
 
     def test_joined_page_rejects_oversized_request(self) -> None:
         with pytest.raises(ValueError):

@@ -42,12 +42,21 @@ data/
 !controls/contaminant_confirmed/**
 !controls/contaminant_suspected/**
 !controls/contaminant_positive/**
-!controls/quiet_negative/**
+# Only the hardened, immutable release payload is unignored. The historical
+# v0.1.2 directory remains local evidence and is never reused.
+controls/quiet_negative_v0.1.2/
+!controls/quiet_negative_v0.1.2_hardened/
+!controls/quiet_negative_v0.1.2_hardened/manifest.yaml
+!controls/quiet_negative_v0.1.2_hardened/raw_candidates.*.parquet
+!controls/quiet_negative_v0.1.2_hardened/quiet_negative.*.parquet
+!controls/quiet_negative_v0.1.2_hardened/exclusions.*.parquet
 
 # Resumable v0.1.2 acquisition checkpoints are local working state. Only the
 # immutable controls/quiet_negative_v0.1.2 artifacts are release payloads.
 controls/cache/quiet_negative_v0.1.2.raw.parquet
 controls/cache/quiet_negative_v0.1.2.raw.parquet.manifest.yaml
+controls/cache/quiet_negative_v0.1.2_hardened.raw.parquet
+controls/cache/quiet_negative_v0.1.2_hardened.raw.parquet.manifest.yaml
 
 # Local environment
 .env

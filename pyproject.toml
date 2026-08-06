@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools==83.0.0", "wheel==0.47.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -21,14 +21,16 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Astronomy",
 ]
 dependencies = [
-    "astropy>=6.0",
-    "astroquery>=0.4.7",
-    "numpy>=1.26",
-    "pandas>=2.2",
-    "pyarrow>=15.0",
-    "scikit-learn>=1.4",
-    "scipy>=1.12",
-    "pyyaml>=6.0",
+    "astropy==8.0.1",
+    "astroquery==0.4.11",
+    "numpy==2.4.6; python_version < '3.12'",
+    "numpy==2.5.1; python_version >= '3.12'",
+    "pandas==3.0.5",
+    "pyarrow==25.0.0",
+    "scikit-learn==1.9.0",
+    "scipy==1.17.1; python_version < '3.12'",
+    "scipy==1.18.0; python_version >= '3.12'",
+    "pyyaml==6.0.3",
 ]
 
 [project.optional-dependencies]
@@ -71,6 +73,8 @@ module = [
     "numpy.*",
     "pandas",
     "pandas.*",
+    "pyarrow",
+    "pyarrow.*",
     "yaml",
 ]
 ignore_missing_imports = true

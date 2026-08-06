@@ -32,8 +32,8 @@ The first v0.1.2 implementation slice builds the registered control population o
 
 ```bash
 python -m pharos.cli -v build_quiet_negative_v012 \
-  --output-dir controls/quiet_negative_v0.1.2 \
-  --raw-cache controls/cache/quiet_negative_v0.1.2.raw.parquet \
+  --output-dir controls/quiet_negative_v0.1.2_hardened \
+  --raw-cache controls/cache/quiet_negative_v0.1.2_hardened.raw.parquet \
   --minimum-joined 55000
 ```
 

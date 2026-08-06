@@ -3,8 +3,8 @@
 The conformant v0.1.2 control-population command is:
 
     python -m pharos.cli build_quiet_negative_v012 \\
-        --output-dir controls/quiet_negative_v0.1.2 \\
-        --raw-cache controls/cache/quiet_negative_v0.1.2.raw.parquet \\
+        --output-dir controls/quiet_negative_v0.1.2_hardened \\
+        --raw-cache controls/cache/quiet_negative_v0.1.2_hardened.raw.parquet \\
         --minimum-joined 55000
 
 The historical target-fetch command is:
@@ -90,7 +90,14 @@ def _resolve_repository_relative_path(value: str, *, label: str) -> tuple[Path, 
     if relative.is_absolute() or ".." in relative.parts:
         raise ValueError(f"{label} must be a repository-relative path without '..'")
     repository_root = Path(__file__).resolve().parents[2]
-    resolved = (repository_root / relative).resolve(strict=False)
+    candidate = repository_root / relative
+    current = repository_root
+    for part in relative.parts:
+        current = current / part
+        if current.exists() or current.is_symlink():
+            if current.is_symlink():
+                raise ValueError(f"{label} path contains a symlink")
+    resolved = candidate.resolve(strict=False)
     if not resolved.is_relative_to(repository_root):
         raise ValueError(f"{label} resolves outside the repository")
     return resolved, relative.as_posix()
@@ -396,12 +403,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     qn_v012.add_argument(
         "--output-dir",
-        default="controls/quiet_negative_v0.1.2",
+        default="controls/quiet_negative_v0.1.2_hardened",
         help="Repository-relative output directory for immutable parquets + manifest.",
     )
     qn_v012.add_argument(
         "--raw-cache",
-        default="controls/cache/quiet_negative_v0.1.2.raw.parquet",
+        default="controls/cache/quiet_negative_v0.1.2_hardened.raw.parquet",
         help="Repository-relative raw joined-candidate cache.",
     )
     qn_v012.add_argument(
@@ -419,7 +426,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     inj.add_argument(
         "--controls-manifest",
-        default="controls/quiet_negative_v0.1.2/manifest.yaml",
+        default="controls/quiet_negative_v0.1.2_hardened/manifest.yaml",
         help="Path to an exact-schema validated v0.1.2 control manifest.",
     )
     inj.add_argument(
@@ -449,7 +456,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fdr.add_argument(
         "--controls-manifest",
-        default="controls/quiet_negative_v0.1.2/manifest.yaml",
+        default="controls/quiet_negative_v0.1.2_hardened/manifest.yaml",
         help="Path to an exact-schema validated v0.1.2 control manifest.",
     )
     fdr.add_argument(
@@ -517,7 +524,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cal.add_argument(
         "--controls-manifest",
-        default="controls/quiet_negative_v0.1.2/manifest.yaml",
+        default="controls/quiet_negative_v0.1.2_hardened/manifest.yaml",
         help="Path to an exact-schema validated v0.1.2 control manifest.",
     )
     cal.add_argument(

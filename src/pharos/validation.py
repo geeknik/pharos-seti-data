@@ -17,6 +17,28 @@ from pandas.api.types import is_bool_dtype, is_integer_dtype, is_numeric_dtype
 MAX_CLI_SOURCE_IDS = 10_000
 MAX_NETWORK_SOURCE_CHUNK = 500
 MAX_MATCHES_PER_SOURCE_CATALOG = 100
+MAX_RAW_CONTROL_ROWS = 250_000
+MAX_FINAL_CONTROL_ROWS = 250_000
+MAX_EXCLUSION_ROWS = 5_000_000
+TEFF_MIN_K = 1.0
+TEFF_MAX_K = 100_000.0
+BP_RP_G_MAG_BIN_WIDTH = 0.5
+BP_RP_EXCESS_MAX_DELTA = 0.1
+WISE_MAG_ERROR_TO_SNR = 1.0857
+# TAP evaluates the same arithmetic in double precision; these tolerances allow
+# only Parquet float round-tripping, not independently supplied SNR values.
+WISE_SNR_CONSISTENCY_RTOL = 1e-9
+WISE_SNR_CONSISTENCY_ATOL = 1e-12
+COVERAGE_CLASS_CUTS: dict[str, float] = {
+    "parallax_over_error_min": 5.0,
+    "g_mag_max": 18.0,
+    "distance_pc_max": 200.0,
+    "allwise_angular_distance_max_arcsec": 3.0,
+    "w1_snr_min": 5.0,
+    "w2_snr_min": 5.0,
+    "w3_snr_min": 3.0,
+    "w4_snr_min": 2.0,
+}
 
 GAIA_RESPONSE_COLUMNS: tuple[str, ...] = (
     "gaia_dr3_source_id",
@@ -82,9 +104,7 @@ TMASS_RESPONSE_COLUMNS: tuple[str, ...] = (
 )
 
 JOINED_SOURCE_COLUMNS: tuple[str, ...] = (
-    GAIA_RESPONSE_COLUMNS
-    + ALLWISE_RESPONSE_COLUMNS[1:]
-    + TMASS_RESPONSE_COLUMNS[1:]
+    GAIA_RESPONSE_COLUMNS + ALLWISE_RESPONSE_COLUMNS[1:] + TMASS_RESPONSE_COLUMNS[1:]
 )
 
 CONTROL_DERIVED_COLUMNS: tuple[str, ...] = (
@@ -203,6 +223,7 @@ def validate_gaia_response(frame: pd.DataFrame, *, requested_rows: int) -> None:
             "phot_bp_rp_excess_factor",
             "qso_probability",
             "galaxy_probability",
+            "teff_gspphot",
         ),
         context=context,
     )
@@ -221,6 +242,7 @@ def validate_gaia_response(frame: pd.DataFrame, *, requested_rows: int) -> None:
             "phot_bp_rp_excess_factor",
             "qso_probability",
             "galaxy_probability",
+            "teff_gspphot",
         ),
         context=context,
     )
@@ -230,12 +252,19 @@ def validate_gaia_response(frame: pd.DataFrame, *, requested_rows: int) -> None:
     _require_between(frame, "galactic_b", -90.0, 90.0, context=context)
     if (frame["parallax"] <= 0).any() or (frame["parallax_over_error"] < 5.0).any():
         raise ValueError(f"{context}: parallax coverage cut violated")
+    if (frame["parallax"] < 5.0).any() or (frame["parallax_error"] <= 0.0).any():
+        raise ValueError(f"{context}: distance/error coverage cut violated")
     if (frame["phot_g_mean_mag"] > 18.0).any() or (frame["ruwe"] >= 1.2).any():
         raise ValueError(f"{context}: quiet-negative quality cut violated")
     if (frame["galactic_b"].abs() <= 20.0).any():
         raise ValueError(f"{context}: Galactic latitude cut violated")
     for column in ("qso_probability", "galaxy_probability"):
         _require_between(frame, column, 0.0, 0.1, context=context, inclusive_upper=False)
+    if (
+        (frame["teff_gspphot"] < TEFF_MIN_K)
+        | (frame["teff_gspphot"] > TEFF_MAX_K)
+    ).any():
+        raise ValueError(f"{context}: effective temperature eligibility cut violated")
     if not is_bool_dtype(frame["duplicated_source"].dtype):
         raise TypeError(f"{context}: duplicated_source must use a boolean dtype")
     if frame["duplicated_source"].any() or (frame["non_single_star"] != 0).any():
@@ -273,15 +302,94 @@ def validate_allwise_response(frame: pd.DataFrame, *, requested_ids: set[int]) -
     _require_between(frame, "wise_xm_angular_distance", 0.0, 1.5, context=context)
     if (frame["wise_xm_n_neighbours"] != 1).any() or (frame["wise_xm_n_mates"] != 0).any():
         raise ValueError(f"{context}: crossmatch multiplicity cut violated")
-    if (frame["w1snr"] < 5.0).any() or (frame["w2snr"] < 5.0).any():
-        raise ValueError(f"{context}: W1/W2 SNR cut violated")
-    if (frame["w3snr"] < 3.0).any():
-        raise ValueError(f"{context}: W3 SNR cut violated")
+    for band in ("w1", "w2", "w3"):
+        minimum_snr = COVERAGE_CLASS_CUTS[f"{band}_snr_min"]
+        maximum = WISE_MAG_ERROR_TO_SNR / minimum_snr
+        errors = frame[f"{band}mpro_error"]
+        snr = frame[f"{band}snr"]
+        if ((errors <= 0.0) | (errors > maximum)).any():
+            raise ValueError(
+                f"{context}: {band.upper()} uncertainty violates the registered "
+                f"(0, {maximum:.6f}] gate"
+            )
+        if (snr < minimum_snr).any():
+            raise ValueError(f"{context}: {band.upper()} SNR cut violated")
+        expected_snr = WISE_MAG_ERROR_TO_SNR / errors
+        if not np.isclose(
+            snr.to_numpy(dtype=float),
+            expected_snr.to_numpy(dtype=float),
+            rtol=WISE_SNR_CONSISTENCY_RTOL,
+            atol=WISE_SNR_CONSISTENCY_ATOL,
+        ).all():
+            raise ValueError(f"{context}: {band.upper()} SNR is inconsistent with its uncertainty")
+    w4 = frame[["w4mpro", "w4mpro_error", "w4snr"]]
+    if (~(w4.isna().all(axis=1) | w4.notna().all(axis=1))).any():
+        raise ValueError(f"{context}: partial W4 photometry is forbidden")
+    covered_w4 = w4.notna().all(axis=1)
+    if covered_w4.any():
+        values = w4.loc[covered_w4].to_numpy(dtype=float)
+        if not np.isfinite(values).all():
+            raise ValueError(f"{context}: covered W4 photometry must be finite")
+        covered = w4.loc[covered_w4]
+        if (covered["w4mpro_error"] <= 0.0).any():
+            raise ValueError(f"{context}: covered W4 uncertainty must be positive")
+        expected_w4_snr = WISE_MAG_ERROR_TO_SNR / covered["w4mpro_error"]
+        if not np.isclose(
+            covered["w4snr"].to_numpy(dtype=float),
+            expected_w4_snr.to_numpy(dtype=float),
+            rtol=WISE_SNR_CONSISTENCY_RTOL,
+            atol=WISE_SNR_CONSISTENCY_ATOL,
+        ).all():
+            raise ValueError(f"{context}: W4 SNR is inconsistent with its uncertainty")
+        if (covered["w4snr"] < COVERAGE_CLASS_CUTS["w4_snr_min"]).any():
+            raise ValueError(f"{context}: covered W4 SNR cut violated")
+    designation = frame["allwise_designation"]
+    if designation.isna().any() or (designation.astype(str).str.len() == 0).any():
+        raise ValueError(f"{context}: AllWISE designation must be non-empty")
     flags = frame["allwise_cc_flags"].dropna().astype(str)
     if not flags.isin({"0000"}).all():
         raise ValueError(f"{context}: contamination flags escaped query")
     if not frame["allwise_ext_flg"].dropna().isin({0}).all():
         raise ValueError(f"{context}: extended-source flags escaped query")
+
+
+def normalize_optional_w4(frame: pd.DataFrame) -> pd.DataFrame:
+    """Represent valid but sub-threshold W4 measurements as absent.
+
+    The frozen coverage class requires W1--W3 but makes W4 optional and scores
+    it only at SNR >= 2.  Gaia returns W4 columns when a weaker measurement is
+    available, so this bounded post-query normalization converts only finite,
+    internally consistent sub-threshold W4 triples to all-null.  Malformed or
+    inconsistent triples are retained for the validator to reject.
+    """
+    required = ("w4mpro", "w4mpro_error", "w4snr")
+    if any(column not in frame.columns for column in required):
+        raise ValueError("W4 normalization requires the complete W4 column triple")
+    out = frame.copy()
+    w4 = out.loc[:, required]
+    covered = w4.notna().all(axis=1)
+    if not covered.any():
+        return out
+    covered_values = w4.loc[covered]
+    finite = pd.Series(
+        np.isfinite(covered_values.to_numpy(dtype=float)).all(axis=1),
+        index=covered_values.index,
+    )
+    positive_error = covered_values["w4mpro_error"] > 0.0
+    expected = WISE_MAG_ERROR_TO_SNR / covered_values["w4mpro_error"]
+    consistent = pd.Series(
+        np.isclose(
+            covered_values["w4snr"].to_numpy(dtype=float),
+            expected.to_numpy(dtype=float),
+            rtol=WISE_SNR_CONSISTENCY_RTOL,
+            atol=WISE_SNR_CONSISTENCY_ATOL,
+        ),
+        index=covered_values.index,
+    )
+    below_threshold = covered_values["w4snr"] < COVERAGE_CLASS_CUTS["w4_snr_min"]
+    absent = finite & positive_error & consistent & below_threshold
+    out.loc[absent[absent].index, list(required)] = np.nan
+    return out
 
 
 def validate_tmass_response(frame: pd.DataFrame, *, requested_ids: set[int]) -> None:
@@ -310,6 +418,31 @@ def validate_tmass_response(frame: pd.DataFrame, *, requested_ids: set[int]) -> 
         context=context,
     )
     _require_between(frame, "tmass_xm_angular_distance", 0.0, 1.5, context=context)
+    if (frame["tmass_ks_msigcom"] <= 0.0).any():
+        raise ValueError(f"{context}: 2MASS Ks uncertainty must be positive")
+    designation = frame["tmass_designation"]
+    if designation.isna().any() or (designation.astype(str).str.len() == 0).any():
+        raise ValueError(f"{context}: 2MASS designation must be non-empty")
+
+
+def validate_joined_source_frame(frame: pd.DataFrame, *, maximum_rows: int) -> None:
+    """Re-run every registered Gaia/AllWISE/2MASS gate on joined rows."""
+    context = "joined quiet-negative sources"
+    validate_exact_columns(frame, JOINED_SOURCE_COLUMNS, context=context)
+    if len(frame) > maximum_rows:
+        raise ValueError(f"{context}: row count exceeds registered bound")
+    if frame["gaia_dr3_source_id"].duplicated().any():
+        raise ValueError(f"{context}: duplicate source identifiers are forbidden")
+    for start in range(0, len(frame), MAX_NETWORK_SOURCE_CHUNK):
+        chunk = frame.iloc[start : start + MAX_NETWORK_SOURCE_CHUNK]
+        if chunk.empty:
+            continue
+        validate_gaia_response(chunk.loc[:, GAIA_RESPONSE_COLUMNS], requested_rows=len(chunk))
+        requested_ids = set(chunk["gaia_dr3_source_id"].astype(int))
+        validate_allwise_response(
+            chunk.loc[:, ALLWISE_RESPONSE_COLUMNS], requested_ids=requested_ids
+        )
+        validate_tmass_response(chunk.loc[:, TMASS_RESPONSE_COLUMNS], requested_ids=requested_ids)
 
 
 def validate_control_artifact(frame: pd.DataFrame, *, minimum_rows: int) -> None:
@@ -317,7 +450,11 @@ def validate_control_artifact(frame: pd.DataFrame, *, minimum_rows: int) -> None
     validate_exact_columns(frame, CONTROL_ARTIFACT_COLUMNS, context=context)
     if len(frame) < minimum_rows:
         raise ValueError(f"{context}: requires at least {minimum_rows} rows; got {len(frame)}")
-    _validate_source_id_column(frame, context=context, unique=True)
+    if len(frame) > MAX_FINAL_CONTROL_ROWS:
+        raise ValueError(f"{context}: row count exceeds registered bound")
+    validate_joined_source_frame(
+        frame.loc[:, JOINED_SOURCE_COLUMNS], maximum_rows=MAX_FINAL_CONTROL_ROWS
+    )
     _require_finite(
         frame,
         (
@@ -333,6 +470,62 @@ def validate_control_artifact(frame: pd.DataFrame, *, minimum_rows: int) -> None
     _require_between(frame, "dec", -90.0, 90.0, context=context)
     if (frame["bp_rp_excess_delta"].abs() > 0.1 + 1e-12).any():
         raise ValueError(f"{context}: BP/RP excess cut violated")
+    expected_lower = np.floor(frame["phot_g_mean_mag"] / 0.5) * 0.5
+    if not np.allclose(frame["gmag_bin_lower"], expected_lower, rtol=0.0, atol=1e-12):
+        raise ValueError(f"{context}: BP/RP magnitude-bin assignment mismatch")
+    expected_delta = frame["phot_bp_rp_excess_factor"] - frame["bp_rp_excess_bin_median"]
+    if not np.allclose(frame["bp_rp_excess_delta"], expected_delta, rtol=0.0, atol=1e-12):
+        raise ValueError(f"{context}: BP/RP residual relationship mismatch")
+    medians_per_bin = frame.groupby("gmag_bin_lower", observed=True)[
+        "bp_rp_excess_bin_median"
+    ].nunique(dropna=False)
+    if (medians_per_bin != 1).any():
+        raise ValueError(f"{context}: BP/RP bin median is not constant within a bin")
+
+
+def derive_bp_rp_controls(candidates: pd.DataFrame) -> pd.DataFrame:
+    """Recompute the frozen BP/RP cut from the complete parent candidate table."""
+    validate_joined_source_frame(candidates, maximum_rows=MAX_RAW_CONTROL_ROWS)
+    out = candidates.copy()
+    out["gmag_bin_lower"] = (
+        np.floor(out["phot_g_mean_mag"] / BP_RP_G_MAG_BIN_WIDTH)
+        * BP_RP_G_MAG_BIN_WIDTH
+    )
+    out["bp_rp_excess_bin_median"] = out.groupby(
+        "gmag_bin_lower", observed=True
+    )["phot_bp_rp_excess_factor"].transform("median")
+    out["bp_rp_excess_delta"] = (
+        out["phot_bp_rp_excess_factor"] - out["bp_rp_excess_bin_median"]
+    )
+    out = out[out["bp_rp_excess_delta"].abs() <= BP_RP_EXCESS_MAX_DELTA].copy()
+    out.reset_index(drop=True, inplace=True)
+    validate_exact_columns(out, CONTROL_ARTIFACT_COLUMNS, context="derived BP/RP controls")
+    return out
+
+
+def validate_control_derivation(
+    raw_candidates: pd.DataFrame,
+    controls: pd.DataFrame,
+    exclusions: pd.DataFrame,
+) -> None:
+    """Prove the released controls equal BP/RP survivors minus exact exclusions."""
+    expected = derive_bp_rp_controls(raw_candidates)
+    excluded_ids = set(exclusions["gaia_dr3_source_id"].astype(int))
+    expected = expected[
+        ~expected["gaia_dr3_source_id"].astype(int).isin(excluded_ids)
+    ].reset_index(drop=True)
+    try:
+        pd.testing.assert_frame_equal(
+            controls.reset_index(drop=True),
+            expected,
+            check_exact=False,
+            rtol=1e-7,
+            atol=1e-12,
+        )
+    except AssertionError as exc:
+        raise ValueError(
+            "quiet-negative controls do not match the registered parent-population derivation"
+        ) from exc
 
 
 def validate_exclusions(frame: pd.DataFrame) -> None:
@@ -340,6 +533,8 @@ def validate_exclusions(frame: pd.DataFrame) -> None:
     validate_exact_columns(frame, EXCLUSION_COLUMNS, context=context)
     if frame.empty:
         return
+    if len(frame) > MAX_EXCLUSION_ROWS:
+        raise ValueError(f"{context}: row count exceeds registered bound")
     _validate_source_id_column(frame, context=context, unique=False)
     _require_numeric(frame, ("angular_distance_arcsec",), context=context)
     _require_finite(frame, ("angular_distance_arcsec",), context=context)
@@ -348,6 +543,8 @@ def validate_exclusions(frame: pd.DataFrame) -> None:
         raise ValueError(f"{context}: unknown catalog")
     if not frame["exclusion_class"].isin({"YSO", "AGN", "debris_disk"}).all():
         raise ValueError(f"{context}: unknown exclusion class")
+    if frame.duplicated(subset=list(EXCLUSION_COLUMNS)).any():
+        raise ValueError(f"{context}: residual exact duplicate tuple is forbidden")
     counts = frame.groupby(["gaia_dr3_source_id", "exclusion_catalog"], dropna=False).size()
     if (counts > MAX_MATCHES_PER_SOURCE_CATALOG).any():
         raise ValueError(f"{context}: retained-match bound exceeded")

@@ -26,7 +26,7 @@ import logging
 import os
 import stat
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
@@ -49,20 +49,15 @@ ALLWISE_XMATCH_TABLE = "gaiadr3.allwise_best_neighbour"
 ALLWISE_PHOTO_TABLE = "gaiadr1.allwise_original_valid"
 TMASS_XMATCH_TABLE = "gaiadr3.tmass_psc_xsc_best_neighbour"
 TMASS_PHOTO_TABLE = "gaiadr1.tmass_original_valid"
+GAIA_TAP_ENDPOINT = "https://gea.esac.esa.int/tap-server/tap"
+SKY_LONGITUDE_BIN_WIDTH_DEG = 30.0
+SKY_LATITUDE_HEMISPHERES: tuple[str, ...] = ("north", "south")
 
 # ---------------------------------------------------------------------------
 # Pre-registered cuts for the WISE-only coverage class.
 # Source: pre_registration/v0.1_ir_benchmark.md §2.
 # ---------------------------------------------------------------------------
-COVERAGE_CLASS_CUTS: dict[str, float] = {
-    "parallax_over_error_min": 5.0,
-    "g_mag_max": 18.0,
-    "distance_pc_max": 200.0,
-    "allwise_angular_distance_max_arcsec": 3.0,
-    "w1_snr_min": 5.0,
-    "w2_snr_min": 5.0,
-    "w3_snr_min": 3.0,
-}
+COVERAGE_CLASS_CUTS = validation.COVERAGE_CLASS_CUTS
 
 # ---------------------------------------------------------------------------
 # Pre-registered additional cuts for the quiet-negative control population.
@@ -161,15 +156,59 @@ class SourceQueryResult:
     n_sources: int
     query_traces: tuple["QueryTrace", ...] = ()
     gaia_rows: int = 0
+    selection_target_rows: int = 0
+    selection_strata: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True)
 class QueryTrace:
-    """Hash-only provenance for one remote request."""
+    """Bounded provenance for one remote request."""
 
     service: str
+    endpoint: str
     query_sha256: str
+    input_sha256: str
+    response_sha256: str
     response_rows: int
+    requested_at_utc: str
+    received_at_utc: str
+
+
+@dataclass(frozen=True)
+class SamplingStratum:
+    """One deterministic longitude/hemisphere selection stratum."""
+
+    stratum_id: str
+    longitude_min_deg: float
+    longitude_max_deg: float
+    hemisphere: str
+    quota: int
+    cursor_source_id: int = 0
+    collected_rows: int = 0
+
+
+def build_sampling_strata(total_rows: int) -> tuple[SamplingStratum, ...]:
+    """Allocate a deterministic near-equal quota over 24 all-sky strata."""
+    if not isinstance(total_rows, int) or isinstance(total_rows, bool) or total_rows < 1:
+        raise ValueError("total_rows must be a positive integer")
+    count = int(360 / SKY_LONGITUDE_BIN_WIDTH_DEG) * len(SKY_LATITUDE_HEMISPHERES)
+    base, remainder = divmod(total_rows, count)
+    strata: list[SamplingStratum] = []
+    index = 0
+    for longitude_min in range(0, 360, int(SKY_LONGITUDE_BIN_WIDTH_DEG)):
+        for hemisphere in SKY_LATITUDE_HEMISPHERES:
+            quota = base + (1 if index < remainder else 0)
+            strata.append(
+                SamplingStratum(
+                    stratum_id=f"l{longitude_min:03d}-{longitude_min + 30:03d}-{hemisphere}",
+                    longitude_min_deg=float(longitude_min),
+                    longitude_max_deg=float(longitude_min + 30),
+                    hemisphere=hemisphere,
+                    quota=quota,
+                )
+            )
+            index += 1
+    return tuple(strata)
 
 
 def _hash_query(query_text: str) -> str:
@@ -276,9 +315,7 @@ def build_quiet_negative_gaia_adql(limit: int, *, after_source_id: int = 0) -> s
     if not isinstance(limit, int) or isinstance(limit, bool):
         raise TypeError("limit must be an integer")
     if limit < 1 or limit > validation.MAX_NETWORK_SOURCE_CHUNK:
-        raise ValueError(
-            f"limit must be within [1, {validation.MAX_NETWORK_SOURCE_CHUNK}]"
-        )
+        raise ValueError(f"limit must be within [1, {validation.MAX_NETWORK_SOURCE_CHUNK}]")
     if not isinstance(after_source_id, int) or isinstance(after_source_id, bool):
         raise TypeError("after_source_id must be an integer")
     if after_source_id < 0 or after_source_id.bit_length() > 64:
@@ -300,6 +337,7 @@ def build_quiet_negative_gaia_adql(limit: int, *, after_source_id: int = 0) -> s
         f"classprob_dsc_combmod_galaxy < {qn['galaxy_prob_max']}",
         f"classprob_dsc_combmod_quasar < {qn['quasar_prob_max']}",
         f"ABS(b) > {qn['galactic_latitude_min_deg']}",
+        "teff_gspphot IS NOT NULL",
         f"source_id > {after_source_id}",
     ]
     where_block = "\n  AND ".join(where_clauses)
@@ -312,7 +350,12 @@ def build_quiet_negative_gaia_adql(limit: int, *, after_source_id: int = 0) -> s
     )
 
 
-def build_quiet_negative_joined_adql(limit: int, *, after_source_id: int = 0) -> str:
+def build_quiet_negative_joined_adql(
+    limit: int,
+    *,
+    after_source_id: int = 0,
+    stratum: SamplingStratum | None = None,
+) -> str:
     """Build one bounded, keyset-paginated Gaia+AllWISE+2MASS page.
 
     Page size is capped at 500 by the frozen trust-boundary requirement.
@@ -323,9 +366,7 @@ def build_quiet_negative_joined_adql(limit: int, *, after_source_id: int = 0) ->
     if not isinstance(limit, int) or isinstance(limit, bool):
         raise TypeError("limit must be an integer")
     if limit < 1 or limit > validation.MAX_NETWORK_SOURCE_CHUNK:
-        raise ValueError(
-            f"limit must be within [1, {validation.MAX_NETWORK_SOURCE_CHUNK}]"
-        )
+        raise ValueError(f"limit must be within [1, {validation.MAX_NETWORK_SOURCE_CHUNK}]")
     if not isinstance(after_source_id, int) or isinstance(after_source_id, bool):
         raise TypeError("after_source_id must be an integer")
     if after_source_id < 0 or after_source_id.bit_length() > 64:
@@ -348,16 +389,32 @@ def build_quiet_negative_joined_adql(limit: int, *, after_source_id: int = 0) ->
         f"awbn.angular_distance <= {qn['allwise_angular_distance_max_arcsec']}",
         f"awbn.number_of_neighbours = {int(qn['allwise_n_neighbours'])}",
         f"awbn.number_of_mates = {int(qn['allwise_n_mates'])}",
-        f"aw.w1mpro_error <= {1.0857 / cov['w1_snr_min']:.6f}",
-        f"aw.w2mpro_error <= {1.0857 / cov['w2_snr_min']:.6f}",
-        f"aw.w3mpro_error <= {1.0857 / cov['w3_snr_min']:.6f}",
+        "aw.w1mpro_error > 0",
+        "aw.w2mpro_error > 0",
+        "aw.w3mpro_error > 0",
+        f"aw.w1mpro_error <= {validation.WISE_MAG_ERROR_TO_SNR / cov['w1_snr_min']:.6f}",
+        f"aw.w2mpro_error <= {validation.WISE_MAG_ERROR_TO_SNR / cov['w2_snr_min']:.6f}",
+        f"aw.w3mpro_error <= {validation.WISE_MAG_ERROR_TO_SNR / cov['w3_snr_min']:.6f}",
         "(aw.cc_flags IS NULL OR aw.cc_flags = '0000')",
         "(aw.ext_flag IS NULL OR aw.ext_flag = 0)",
         f"tmbn.angular_distance <= {qn['tmass_angular_distance_max_arcsec']}",
         "tm.ks_m IS NOT NULL",
         "tm.ks_msigcom IS NOT NULL",
+        "gs.teff_gspphot IS NOT NULL",
         f"gs.source_id > {after_source_id}",
     ]
+    if stratum is not None:
+        if stratum.hemisphere not in SKY_LATITUDE_HEMISPHERES:
+            raise ValueError("sampling stratum hemisphere is invalid")
+        if not (0.0 <= stratum.longitude_min_deg < stratum.longitude_max_deg <= 360.0):
+            raise ValueError("sampling stratum longitude bounds are invalid")
+        where_clauses.extend(
+            [
+                f"gs.l >= {stratum.longitude_min_deg:.1f}",
+                f"gs.l < {stratum.longitude_max_deg:.1f}",
+                "gs.b > 20.0" if stratum.hemisphere == "north" else "gs.b < -20.0",
+            ]
+        )
     return (
         f"SELECT TOP {limit}\n  "
         + _build_select_clause()
@@ -394,9 +451,12 @@ def build_allwise_for_ids_adql(source_ids: Iterable[int]) -> str:
         f"awbn.angular_distance <= {qn['allwise_angular_distance_max_arcsec']}",
         f"awbn.number_of_neighbours = {int(qn['allwise_n_neighbours'])}",
         f"awbn.number_of_mates = {int(qn['allwise_n_mates'])}",
-        f"aw.w1mpro_error <= {1.0857 / cov['w1_snr_min']:.6f}",
-        f"aw.w2mpro_error <= {1.0857 / cov['w2_snr_min']:.6f}",
-        f"aw.w3mpro_error <= {1.0857 / cov['w3_snr_min']:.6f}",
+        "aw.w1mpro_error > 0",
+        "aw.w2mpro_error > 0",
+        "aw.w3mpro_error > 0",
+        f"aw.w1mpro_error <= {validation.WISE_MAG_ERROR_TO_SNR / cov['w1_snr_min']:.6f}",
+        f"aw.w2mpro_error <= {validation.WISE_MAG_ERROR_TO_SNR / cov['w2_snr_min']:.6f}",
+        f"aw.w3mpro_error <= {validation.WISE_MAG_ERROR_TO_SNR / cov['w3_snr_min']:.6f}",
         "(aw.cc_flags IS NULL OR aw.cc_flags = '0000')",
         "(aw.ext_flag IS NULL OR aw.ext_flag = 0)",
     ]
@@ -774,7 +834,7 @@ def fetch_quiet_negative_controls(
         raise ValueError("limit must be within [1, 250000]")
 
     page_size = validation.MAX_NETWORK_SOURCE_CHUNK
-    cursor = 0
+    strata = list(build_sampling_strata(limit))
     gaia_rows = 0
     joined_parts: list[pd.DataFrame] = []
     traces: list[QueryTrace] = []
@@ -788,74 +848,111 @@ def fetch_quiet_negative_controls(
         except (FileNotFoundError, TypeError, ValueError) as exc:
             raise RuntimeError("refusing legacy, incomplete, or invalid raw cache") from exc
         joined_parts.append(cached)
-        cursor = int(checkpoint["cursor_source_id"])
         gaia_rows = int(checkpoint["gaia_rows"])
+        if int(checkpoint["selection_target_rows"]) != limit:
+            raise RuntimeError("raw checkpoint selection target does not match requested limit")
+        registered = checkpoint["selection_strata"]
+        expected_ids = [item.stratum_id for item in strata]
+        if [str(item["stratum_id"]) for item in registered] != expected_ids:
+            raise RuntimeError("raw checkpoint selection strata do not match runtime plan")
+        strata = [SamplingStratum(**dict(item)) for item in registered]
         traces = [
             QueryTrace(
                 str(trace["service"]),
+                str(trace["endpoint"]),
                 str(trace["query_sha256"]),
+                str(trace["input_sha256"]),
+                str(trace["response_sha256"]),
                 int(trace["response_rows"]),
+                str(trace["requested_at_utc"]),
+                str(trace["received_at_utc"]),
             )
             for trace in checkpoint["query_traces"]
         ]
         retrieved_at = str(checkpoint["retrieved_at_utc"])
         logger.info("resuming validated raw checkpoint at %d joined rows", len(cached))
 
-    while sum(len(part) for part in joined_parts) < limit:
-        joined_query = build_quiet_negative_joined_adql(page_size, after_source_id=cursor)
-        page = _execute_tap_query(joined_query)
-        validation.validate_exact_columns(
-            page, validation.JOINED_SOURCE_COLUMNS, context="joined candidate page"
-        )
-        gaia_view = page.loc[:, validation.GAIA_RESPONSE_COLUMNS]
-        validation.validate_gaia_response(gaia_view, requested_rows=page_size)
-        requested_ids = set(gaia_view["gaia_dr3_source_id"].astype(int))
-        validation.validate_allwise_response(
-            page.loc[:, validation.ALLWISE_RESPONSE_COLUMNS], requested_ids=requested_ids
-        )
-        validation.validate_tmass_response(
-            page.loc[:, validation.TMASS_RESPONSE_COLUMNS], requested_ids=requested_ids
-        )
-        query_texts.append(joined_query)
-        traces.append(
-            QueryTrace("Gaia TAP joined", _hash_query(joined_query), len(page))
-        )
-        if page.empty:
-            raise RuntimeError(
-                f"Gaia candidates exhausted before {limit} joined rows were collected"
+    while any(item.collected_rows < item.quota for item in strata):
+        progressed = False
+        for index, stratum in enumerate(strata):
+            remaining = stratum.quota - stratum.collected_rows
+            if remaining <= 0:
+                continue
+            request_rows = min(page_size, remaining)
+            joined_query = build_quiet_negative_joined_adql(
+                request_rows,
+                after_source_id=stratum.cursor_source_id,
+                stratum=stratum,
             )
-        next_cursor = int(page["gaia_dr3_source_id"].max())
-        if next_cursor <= cursor:
-            raise RuntimeError("Gaia keyset pagination did not advance")
-        cursor = next_cursor
-        gaia_rows += len(page)
-        joined_parts.append(page)
-        logger.info(
-            "quiet-negative candidate progress: %d/%d joined rows (%d Gaia rows)",
-            sum(len(part) for part in joined_parts),
-            limit,
-            gaia_rows,
-        )
-        checkpoint_frame = pd.concat(joined_parts, ignore_index=True)
-        artifacts.write_raw_checkpoint(
-            cache_path=cache_path,
-            frame=checkpoint_frame,
-            query_traces=[
-                {
-                    "service": trace.service,
-                    "query_sha256": trace.query_sha256,
-                    "response_rows": trace.response_rows,
-                }
-                for trace in traces
-            ],
-            gaia_rows=gaia_rows,
-            retrieved_at_utc=retrieved_at,
-            generating_command=generating_command,
-        )
+            requested_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            raw_page = _execute_tap_query(joined_query)
+            received_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            response_sha256 = artifacts.sha256_frame(raw_page)
+            page = validation.normalize_optional_w4(raw_page)
+            validation.validate_joined_source_frame(page, maximum_rows=request_rows)
+            if page.empty:
+                raise RuntimeError(f"Gaia stratum {stratum.stratum_id} exhausted before quota")
+            longitude_ok = (page["galactic_l"] >= stratum.longitude_min_deg) & (
+                page["galactic_l"] < stratum.longitude_max_deg
+            )
+            latitude_ok = (
+                page["galactic_b"] > 20.0
+                if stratum.hemisphere == "north"
+                else page["galactic_b"] < -20.0
+            )
+            if not (longitude_ok & latitude_ok).all():
+                raise RuntimeError("Gaia returned a row outside the requested sky stratum")
+            next_cursor = int(page["gaia_dr3_source_id"].max())
+            if next_cursor <= stratum.cursor_source_id:
+                raise RuntimeError("Gaia keyset pagination did not advance")
+            strata[index] = replace(
+                stratum,
+                cursor_source_id=next_cursor,
+                collected_rows=stratum.collected_rows + len(page),
+            )
+            query_texts.append(joined_query)
+            traces.append(
+                QueryTrace(
+                    service="Gaia TAP joined",
+                    endpoint=GAIA_TAP_ENDPOINT,
+                    query_sha256=_hash_query(joined_query),
+                    input_sha256=_hash_query(joined_query),
+                    response_sha256=response_sha256,
+                    response_rows=len(page),
+                    requested_at_utc=requested_at,
+                    received_at_utc=received_at,
+                )
+            )
+            gaia_rows += len(page)
+            joined_parts.append(page)
+            progressed = True
+            logger.info(
+                "quiet-negative candidate progress: %d/%d (%s=%d/%d)",
+                sum(len(part) for part in joined_parts),
+                limit,
+                stratum.stratum_id,
+                strata[index].collected_rows,
+                stratum.quota,
+            )
+            checkpoint_frame = pd.concat(joined_parts, ignore_index=True)
+            artifacts.write_raw_checkpoint(
+                cache_path=cache_path,
+                frame=checkpoint_frame,
+                query_traces=[asdict(trace) for trace in traces],
+                gaia_rows=gaia_rows,
+                retrieved_at_utc=retrieved_at,
+                generating_command=generating_command,
+                selection_target_rows=limit,
+                selection_strata=[asdict(item) for item in strata],
+            )
+        if not progressed:
+            raise RuntimeError("deterministic sky-stratified acquisition made no progress")
 
     merged = pd.concat(joined_parts, ignore_index=True)
     if merged["gaia_dr3_source_id"].duplicated().any():
         raise RuntimeError("duplicate source identifier appeared across Gaia pages")
+    if len(merged) != limit:
+        raise RuntimeError("sky-stratified acquisition did not produce exact target size")
     combined_text = "\n-- NEXT REQUEST --\n".join(query_texts)
     combined_hash = artifacts.sha256_strings([trace.query_sha256 for trace in traces])
     result = SourceQueryResult(
@@ -865,6 +962,8 @@ def fetch_quiet_negative_controls(
         n_sources=len(merged),
         query_traces=tuple(traces),
         gaia_rows=gaia_rows,
+        selection_target_rows=limit,
+        selection_strata=tuple(asdict(item) for item in strata),
     )
     return result
 

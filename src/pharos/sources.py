@@ -1058,7 +1058,8 @@ def fetch_targets_by_source_id(
         logger.info("gaia step chunk %d/%d (%d IDs)", i, n_chunks, len(chunk_ids))
         gaia_parts.append(_execute_tap_query(_build_gaia_by_ids_adql(chunk_ids)))
         logger.info("allwise step chunk %d/%d", i, n_chunks)
-        allwise_parts.append(_execute_tap_query(_build_allwise_by_ids_unfiltered(chunk_ids)))
+        allwise_response = _execute_tap_query(_build_allwise_by_ids_unfiltered(chunk_ids))
+        allwise_parts.append(validation.normalize_optional_w4(allwise_response))
         logger.info("tmass step chunk %d/%d", i, n_chunks)
         tmass_parts.append(_execute_tap_query(_build_tmass_by_ids_unfiltered(chunk_ids)))
 

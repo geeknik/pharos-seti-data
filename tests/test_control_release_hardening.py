@@ -118,6 +118,162 @@ def test_optional_w4_boundary_and_subthreshold_normalization() -> None:
     validation.validate_joined_source_frame(normalized, maximum_rows=2)
 
 
+@pytest.mark.parametrize(
+    ("w4mpro", "w4mpro_error", "w4snr"),
+    [
+        (10.0, float("nan"), float("nan")),  # magnitude only
+        (float("nan"), 0.3, float("nan")),  # uncertainty only
+        (float("nan"), float("nan"), 3.619),  # SNR only
+        (10.0, 0.3, float("nan")),  # magnitude + uncertainty, no derived SNR
+        (10.0, float("nan"), 3.619),  # magnitude + SNR
+        (float("nan"), 0.3, 3.619),  # uncertainty + SNR
+    ],
+)
+def test_optional_w4_response_partial_patterns_become_wholly_absent(
+    w4mpro: float, w4mpro_error: float, w4snr: float
+) -> None:
+    response = _joined_sources(1).loc[:, validation.JOINED_SOURCE_COLUMNS].copy()
+    response.loc[0, ["w4mpro", "w4mpro_error", "w4snr"]] = [
+        w4mpro,
+        w4mpro_error,
+        w4snr,
+    ]
+    original = response.copy(deep=True)
+
+    normalized = validation.normalize_optional_w4(response)
+
+    pd.testing.assert_frame_equal(response, original)
+    assert normalized.loc[0, ["w4mpro", "w4mpro_error", "w4snr"]].isna().all()
+    validation.validate_joined_source_frame(normalized, maximum_rows=1)
+
+
+@pytest.mark.parametrize(
+    ("w4mpro", "w4mpro_error", "w4snr", "error_type", "message"),
+    [
+        (float("inf"), float("nan"), float("nan"), ValueError, "must be finite"),
+        ("not-a-number", float("nan"), float("nan"), TypeError, "must be numeric"),
+        (float("nan"), -0.1, float("nan"), ValueError, "uncertainty must be positive"),
+        (float("nan"), float("nan"), -0.1, ValueError, "SNR must be non-negative"),
+        (float("nan"), 0.3, 99.0, ValueError, "SNR is inconsistent"),
+    ],
+)
+def test_optional_w4_response_malformed_partial_patterns_are_rejected(
+    w4mpro: object,
+    w4mpro_error: float,
+    w4snr: float,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    response = _joined_sources(1).loc[:, validation.JOINED_SOURCE_COLUMNS].copy()
+    if isinstance(w4mpro, str):
+        response["w4mpro"] = response["w4mpro"].astype(object)
+    response.loc[0, ["w4mpro", "w4mpro_error", "w4snr"]] = [
+        w4mpro,
+        w4mpro_error,
+        w4snr,
+    ]
+
+    with pytest.raises(error_type, match=message):
+        validation.normalize_optional_w4(response)
+
+
+@pytest.mark.parametrize("error", [0.0, -0.1])
+def test_optional_w4_response_complete_nonpositive_error_is_rejected(error: float) -> None:
+    response = _joined_sources(1).loc[:, validation.JOINED_SOURCE_COLUMNS].copy()
+    response.loc[0, "w4mpro_error"] = error
+    response.loc[0, "w4snr"] = validation.WISE_MAG_ERROR_TO_SNR / error if error else float("inf")
+
+    with pytest.raises(ValueError, match="uncertainty must be positive"):
+        validation.normalize_optional_w4(response)
+
+
+def test_optional_w4_response_valid_complete_triple_is_preserved() -> None:
+    response = _joined_sources(1).loc[:, validation.JOINED_SOURCE_COLUMNS].copy()
+    original = response.copy(deep=True)
+    expected = response.loc[0, ["w4mpro", "w4mpro_error", "w4snr"]].copy()
+
+    normalized = validation.normalize_optional_w4(response)
+
+    pd.testing.assert_frame_equal(response, original)
+    pd.testing.assert_series_equal(
+        normalized.loc[0, ["w4mpro", "w4mpro_error", "w4snr"]], expected
+    )
+    validation.validate_joined_source_frame(normalized, maximum_rows=1)
+
+
+def test_optional_w4_response_wholly_absent_remains_wholly_absent() -> None:
+    response = _joined_sources(1).loc[:, validation.JOINED_SOURCE_COLUMNS].copy()
+    response.loc[0, ["w4mpro", "w4mpro_error", "w4snr"]] = float("nan")
+
+    normalized = validation.normalize_optional_w4(response)
+
+    assert normalized.loc[0, ["w4mpro", "w4mpro_error", "w4snr"]].isna().all()
+    validation.validate_joined_source_frame(normalized, maximum_rows=1)
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "error_type", "message"),
+    [
+        ("w4mpro", float("inf"), ValueError, "must be finite"),
+        ("w4mpro_error", float("inf"), ValueError, "must be finite"),
+        ("w4snr", float("inf"), ValueError, "must be finite"),
+        ("w4snr", 999.0, ValueError, "SNR is inconsistent"),
+        ("w4mpro", "not-a-number", TypeError, "must be numeric"),
+    ],
+)
+def test_optional_w4_response_complete_malformed_triple_is_rejected(
+    column: str,
+    value: object,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    response = _joined_sources(1).loc[:, validation.JOINED_SOURCE_COLUMNS].copy()
+    if isinstance(value, str):
+        response[column] = response[column].astype(object)
+    response.loc[0, column] = value
+
+    with pytest.raises(error_type, match=message):
+        validation.normalize_optional_w4(response)
+
+
+@pytest.mark.parametrize(
+    ("column", "value", "message"),
+    [
+        ("w4mpro", float("nan"), "partial W4"),
+        ("w4mpro_error", float("nan"), "partial W4"),
+        ("w4snr", float("nan"), "partial W4"),
+        ("w4mpro_error", 0.0, "W4 uncertainty"),
+        ("w4mpro_error", -0.1, "W4 uncertainty"),
+        ("w4snr", 999.0, "W4 SNR is inconsistent"),
+    ],
+)
+def test_artifact_loader_boundary_rejects_partial_or_forged_w4(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    column: str,
+    value: float,
+    message: str,
+) -> None:
+    manifest_path, controls_path = _valid_manifest(tmp_path, monkeypatch)
+    artifact = pd.read_parquet(controls_path)
+    artifact.loc[0, column] = value
+    forged_path = artifacts.write_content_addressed_parquet(
+        artifact, directory=tmp_path, prefix="quiet_negative_bad_w4"
+    )
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    payload["artifacts"]["controls"] = {
+        "path": forged_path.name,
+        "sha256": artifacts.sha256_file(forged_path),
+        "row_count": len(artifact),
+        "columns": list(artifact.columns),
+        "schema_version": artifacts.CONTROL_SCHEMA_VERSION,
+    }
+    artifacts.atomic_write_yaml(payload, manifest_path)
+
+    with pytest.raises(ValueError, match=message):
+        artifacts.load_control_artifact(manifest_path)
+
+
 def test_bp_rp_relational_revalidation_rejects_forged_delta() -> None:
     controls = control_population.apply_bp_rp_excess_cut(_joined_sources(2))
     controls.loc[0, "bp_rp_excess_delta"] = 0.01

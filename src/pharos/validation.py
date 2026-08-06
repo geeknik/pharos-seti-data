@@ -9,6 +9,7 @@ cannot silently change a released control population.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from numbers import Real
 
 import numpy as np
 import pandas as pd
@@ -295,10 +296,17 @@ def validate_allwise_response(frame: pd.DataFrame, *, requested_ids: set[int]) -
         "w3mpro",
         "w3mpro_error",
         "w3snr",
+        "w4mpro",
+        "w4mpro_error",
+        "w4snr",
         "allwise_ext_flg",
     )
     _require_numeric(frame, numeric, context=context)
-    _require_finite(frame, numeric, context=context)
+    _require_finite(
+        frame,
+        tuple(column for column in numeric if not column.startswith("w4")),
+        context=context,
+    )
     _require_between(frame, "wise_xm_angular_distance", 0.0, 1.5, context=context)
     if (frame["wise_xm_n_neighbours"] != 1).any() or (frame["wise_xm_n_mates"] != 0).any():
         raise ValueError(f"{context}: crossmatch multiplicity cut violated")
@@ -354,41 +362,65 @@ def validate_allwise_response(frame: pd.DataFrame, *, requested_ids: set[int]) -
 
 
 def normalize_optional_w4(frame: pd.DataFrame) -> pd.DataFrame:
-    """Represent valid but sub-threshold W4 measurements as absent.
+    """Canonicalize catalog-missing or valid sub-threshold W4 to absence.
 
     The frozen coverage class requires W1--W3 but makes W4 optional and scores
-    it only at SNR >= 2.  Gaia returns W4 columns when a weaker measurement is
-    available, so this bounded post-query normalization converts only finite,
-    internally consistent sub-threshold W4 triples to all-null.  Malformed or
-    inconsistent triples are retained for the validator to reject.
+    it only at SNR >= 2. Gaia can return incomplete W4 fields, and the derived
+    SNR projection is absent when the uncertainty is absent. At this
+    untrusted-response boundary, catalog-defined wholly absent or partial W4
+    rows are represented as an uncovered W4 channel. A complete, finite,
+    positive-uncertainty, internally consistent triple is also uncovered when
+    it is below the registered SNR threshold. The source is retained because
+    W4 is optional.
+
+    Every present member is validated before missingness normalization.
+    Malformed partial or complete rows are rejected rather than laundered into
+    missing data: nonnumeric or non-finite values, nonpositive uncertainty,
+    negative SNR, and an error/SNR pair inconsistent with
+    ``1.0857 / uncertainty`` all fail closed.
+
+    This function is deliberately not used by artifact loaders. Persisted
+    artifacts must already contain the canonical representation, and the
+    strict validators continue to reject partial or forged W4 triples.
     """
     required = ("w4mpro", "w4mpro_error", "w4snr")
     if any(column not in frame.columns for column in required):
         raise ValueError("W4 normalization requires the complete W4 column triple")
     out = frame.copy()
     w4 = out.loc[:, required]
-    covered = w4.notna().all(axis=1)
-    if not covered.any():
-        return out
-    covered_values = w4.loc[covered]
-    finite = pd.Series(
-        np.isfinite(covered_values.to_numpy(dtype=float)).all(axis=1),
-        index=covered_values.index,
-    )
-    positive_error = covered_values["w4mpro_error"] > 0.0
-    expected = WISE_MAG_ERROR_TO_SNR / covered_values["w4mpro_error"]
-    consistent = pd.Series(
-        np.isclose(
-            covered_values["w4snr"].to_numpy(dtype=float),
-            expected.to_numpy(dtype=float),
-            rtol=WISE_SNR_CONSISTENCY_RTOL,
-            atol=WISE_SNR_CONSISTENCY_ATOL,
-        ),
-        index=covered_values.index,
-    )
-    below_threshold = covered_values["w4snr"] < COVERAGE_CLASS_CUTS["w4_snr_min"]
-    absent = finite & positive_error & consistent & below_threshold
-    out.loc[absent[absent].index, list(required)] = np.nan
+    present = w4.notna()
+    for column in required:
+        values = w4.loc[present[column], column]
+        if not values.map(
+            lambda value: isinstance(value, Real)
+            and not isinstance(value, (bool, np.bool_))
+        ).all():
+            raise TypeError(f"W4 response normalization: {column} must be numeric")
+    numeric = w4.apply(pd.to_numeric, errors="coerce")
+    error_present = present["w4mpro_error"]
+    if (numeric.loc[error_present, "w4mpro_error"] <= 0.0).any():
+        raise ValueError("W4 response normalization: present W4 uncertainty must be positive")
+    present_values = numeric.to_numpy(dtype=float)[present.to_numpy(dtype=bool)]
+    if not np.isfinite(present_values).all():
+        raise ValueError("W4 response normalization: present W4 photometry must be finite")
+
+    snr_present = present["w4snr"]
+    if (numeric.loc[snr_present, "w4snr"] < 0.0).any():
+        raise ValueError("W4 response normalization: present W4 SNR must be non-negative")
+    error_and_snr = error_present & snr_present
+    expected_snr = WISE_MAG_ERROR_TO_SNR / numeric.loc[error_and_snr, "w4mpro_error"]
+    if not np.isclose(
+        numeric.loc[error_and_snr, "w4snr"].to_numpy(dtype=float),
+        expected_snr.to_numpy(dtype=float),
+        rtol=WISE_SNR_CONSISTENCY_RTOL,
+        atol=WISE_SNR_CONSISTENCY_ATOL,
+    ).all():
+        raise ValueError("W4 response normalization: present W4 SNR is inconsistent")
+
+    complete = present.all(axis=1)
+    out.loc[~complete, list(required)] = np.nan
+    subthreshold = complete & (numeric["w4snr"] < COVERAGE_CLASS_CUTS["w4_snr_min"])
+    out.loc[subthreshold[subthreshold].index, list(required)] = np.nan
     return out
 
 

@@ -259,7 +259,7 @@ def validate_transport_attempts(
         for key in ("started_at", "finished_at"):
             value = row[key]
             if isinstance(value, pd.Timestamp):
-                row[key] = value.to_pydatetime()
+                row[key] = value.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         for key in ("http_status", "error_code"):
             if pd.isna(row[key]):
                 row[key] = None

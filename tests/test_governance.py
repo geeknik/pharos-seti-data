@@ -10,10 +10,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+FROZEN_BYTES = 8327
+FROZEN_SHA256 = "094f946677e08e195c90640179deabb6904241099f8fccbb018b6a0aa50325db"
+
 PROTECTED_PREREGISTRATION = {
     "pre_registration/FROZEN.md": (
-        7112,
-        "73137787c7546af78918382d5467df2e9b34d2d825f8c521258637a01d9be8e3",
+        FROZEN_BYTES,
+        FROZEN_SHA256,
     ),
     "pre_registration/failed_attempts/v0.1.1_attempt1_calibrated_betas.yaml": (
         1644,
@@ -42,6 +45,10 @@ PROTECTED_PREREGISTRATION = {
     "pre_registration/v0.1.4_control_population.md": (
         17714,
         "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b",
+    ),
+    "pre_registration/v0.1.5_platform_repair.md": (
+        5925,
+        "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d",
     ),
     "pre_registration/v0.1_ir_benchmark.md": (
         10494,
@@ -128,6 +135,15 @@ def test_status_is_strict_and_fail_closed() -> None:
         "119b9e83dd61e470b8fa52c2269403b45958a7cfaca7a26e2142478a44fb9f07"
     ]
     assert v014["supersedes"] == "v0.1.3 (enumerated provisions only)"
+
+    v015 = status["attempts"]["v0_1_5"]
+    assert v015["preregistration_state"] == "frozen"
+    assert v015["implementation_state"] == "not_started"
+    assert v015["acquisition_state"] == "prohibited"
+    assert v015["preregistration_sha256"] == (
+        "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d"
+    )
+    assert v015["supersedes"] == "v0.1.4 (release-platform identity only)"
 
     audit = status["dependency_audit"]
     assert audit["passed"] is True

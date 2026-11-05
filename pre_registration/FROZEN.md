@@ -157,7 +157,7 @@ a6e32d509e31c3e346e79a81eb70b56d7d5310872624480742081b1387853256  pre_registrati
 | Date frozen | 2026-11-05 |
 | Status | FROZEN |
 | Supersedes | the enumerated provisions of v0.1.3 listed in its Section 5 only; all other v0.1.3 provisions are incorporated by reference (effective protocol = v0.1.3 as amended) |
-| Superseded by | (none) |
+| Superseded by | v0.1.5 (release-platform identity only) |
 
 ### Freeze record
 
@@ -179,4 +179,38 @@ Expected output:
 
 ```text
 ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b  pre_registration/v0.1.4_control_population.md
+```
+
+---
+
+## v0.1.5 — Release-Platform Identity Repair
+
+| Field | Value |
+|---|---|
+| Document | [`v0.1.5_platform_repair.md`](v0.1.5_platform_repair.md) |
+| Date frozen | 2026-11-05 |
+| Status | FROZEN |
+| Supersedes | the release-platform identity values registered through v0.1.4 Section 5.3 only (CPython 3.14.6 / macOS 27.0 / build 26A5388g / kernel 27.0.0 / OpenSSL 3.6.3) |
+| Superseded by | (none) |
+
+### Freeze record
+
+| Stage | Date | File size | SHA-256 |
+|---|---|---:|---|
+| Initial freeze | 2026-11-05 | 5,925 bytes | `7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d` |
+
+### Scope note
+
+Platform re-registration only: CPython 3.14.10 / macOS 27.3 (build 26C5035r) / kernel 27.3.0 / OpenSSL 4.1.0 (23 Oct 2026), measured on the acquisition host 2026-11-05. No scientific rule, schema, dependency, or trust-root change. Candidate trees package all three frozen documents (v0.1.5 primary; v0.1.4 and v0.1.3 incorporated).
+
+### Verification command
+
+```sh
+shasum -a 256 pre_registration/v0.1.5_platform_repair.md
+```
+
+Expected output:
+
+```text
+7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d  pre_registration/v0.1.5_platform_repair.md
 ```

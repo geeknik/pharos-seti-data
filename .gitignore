@@ -69,3 +69,4 @@ HANDOFF.md
 
 # Local agent/tool workspace state.
 .zcode/
+.cloudflare/

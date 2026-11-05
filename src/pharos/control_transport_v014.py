@@ -366,7 +366,9 @@ def _run_with_retries(
         finished = _utc_now()
         received = result.wire_bytes if result else 0
         failure_kind = (
-            FailureKind.HTTP_STATUS if result is not None else _failure_kind(error_code)
+            FailureKind.OTHER if succeeded else (
+                FailureKind.HTTP_STATUS if result is not None else _failure_kind(error_code)
+            )
         )
         decision = classify_retry(
             failure_kind=failure_kind,
@@ -374,7 +376,14 @@ def _run_with_retries(
             response_bytes_received=received,
             http_status=status,
         )
-        succeeded = result is not None and 200 <= result.status < 300
+        succeeded = result is not None and (
+            200 <= result.status < 300
+            or (
+                allow_location_status
+                and result.status in (301, 302, 303, 307, 308)
+                and (result.headers.get("Location") or result.headers.get("location"))
+            )
+        )
         outcome = (
             "success"
             if succeeded

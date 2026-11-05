@@ -10,8 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-FROZEN_BYTES = 11578
-FROZEN_SHA256 = "64bffb2e94bac6c3ddc4269a1c7389d54c078855b7fddb0aa95ae077efa3d06c"
+FROZEN_BYTES = 12932
+FROZEN_SHA256 = "4aecca735970bf8e2940d44175d05d5252627da96588278d41198e88f2f6e44b"
 
 PROTECTED_PREREGISTRATION = {
     "pre_registration/FROZEN.md": (
@@ -61,6 +61,14 @@ PROTECTED_PREREGISTRATION = {
     "pre_registration/v0.1.7_parser_containment_repair.md": (
         4454,
         "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49",
+    ),
+    "pre_registration/v0.1.8_tmass_pair_repair.md": (
+        4936,
+        "9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999",
+    ),
+    "pre_registration/failed_attempts/v0.1.8_tmass_partial_pairs.md": (
+        1951,
+        "4d5631f0b175558365fe874cb495b8a79ef2c4a79a30cce05bb6fb73a01eb390",
     ),
     "pre_registration/failed_attempts/v0.1.6_parser_address_space_unenforceable.md": (
         1760,
@@ -178,6 +186,15 @@ def test_status_is_strict_and_fail_closed() -> None:
         "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49"
     )
     assert v017["supersedes"] == "v0.1.6 (parser containment only)"
+
+    v018 = status["attempts"]["v0_1_8"]
+    assert v018["preregistration_state"] == "frozen"
+    assert v018["implementation_state"] == "not_started"
+    assert v018["acquisition_state"] == "prohibited"
+    assert v018["preregistration_sha256"] == (
+        "9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999"
+    )
+    assert v018["supersedes"] == "v0.1.7 (2MASS pair ingestion only)"
 
     audit = status["dependency_audit"]
     assert audit["passed"] is True

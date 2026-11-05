@@ -89,6 +89,15 @@ preregistration_bytes = 4454
 preregistration_sha256 = "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49"
 supersedes = "v0.1.6 (parser containment only)"
 
+[attempts.v0_1_8]
+preregistration_state = "frozen"
+implementation_state = "not_started"
+acquisition_state = "prohibited"
+preregistration = "pre_registration/v0.1.8_tmass_pair_repair.md"
+preregistration_bytes = 4936
+preregistration_sha256 = "9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999"
+supersedes = "v0.1.7 (2MASS pair ingestion only)"
+
 [dependency_audit]
 passed = true
 checked_at_utc = "2026-11-05T01:40:00Z"

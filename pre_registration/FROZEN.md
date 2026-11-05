@@ -271,7 +271,7 @@ Expected output:
 | Date frozen | 2026-11-05 |
 | Status | FROZEN |
 | Supersedes | the parser-worker address-space sentence of the effective protocol only (hard RLIMIT_AS 1 GiB, fatal if unenforceable) |
-| Superseded by | (none) |
+| Superseded by | v0.1.8 (2MASS pair ingestion only) |
 
 ### Freeze record
 
@@ -298,4 +298,42 @@ equality check unenforceable on the registered platform. Its immutable record:
 
 ```sh
 shasum -a 256 pre_registration/v0.1.7_parser_containment_repair.md pre_registration/failed_attempts/v0.1.6_parser_address_space_unenforceable.md
+```
+
+---
+
+## v0.1.8 — 2MASS Pair Ingestion Repair
+
+| Field | Value |
+|---|---|
+| Document | [`v0.1.8_tmass_pair_repair.md`](v0.1.8_tmass_pair_repair.md) |
+| Date frozen | 2026-11-05 |
+| Status | FROZEN |
+| Supersedes | the 2MASS J/H all-present-or-all-null pair rule only (v0.1.3 Section 4.4, second paragraph) |
+| Superseded by | (none) |
+
+### Freeze record
+
+| Stage | Date | File size | SHA-256 |
+|---|---|---:|---|
+| Initial freeze | 2026-11-05 | 4,936 bytes | `9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999` |
+
+### Supporting disposition record
+
+The v0.1.7 attempt validated 5,000 rows across ten transport-complete pages and
+failed closed on the archive's genuine recorded-magnitude-without-uncertainty
+2MASS entries. Full-schema audit preserved in the record. Its immutable record:
+
+| Field | Value |
+|---|---|
+| Document | [`failed_attempts/v0.1.8_tmass_partial_pairs.md`](failed_attempts/v0.1.8_tmass_partial_pairs.md) |
+| Date recorded | 2026-11-05 |
+| Status | FAILED AT REQUEST 10 OF 120 — pages quarantined, nothing reusable |
+| File size | 1,951 bytes |
+| SHA-256 | `4d5631f0b175558365fe874cb495b8a79ef2c4a79a30cce05bb6fb73a01eb390` |
+
+### Verification command
+
+```sh
+shasum -a 256 pre_registration/v0.1.8_tmass_pair_repair.md pre_registration/failed_attempts/v0.1.8_tmass_partial_pairs.md
 ```

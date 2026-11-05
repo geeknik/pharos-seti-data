@@ -59,7 +59,6 @@ from pharos.control_network_v014 import (
 from pharos.control_network_v014 import (
     apply_best_effort_address_space_limit,
     classify_retry,
-    establish_parser_address_space_limit,
 )
 
 _SPOOL_DIRNAME: Final = "spool"

@@ -13,6 +13,7 @@ from pharos import control_loaders_v014 as loaders
 from pharos import control_manifests_v014 as manifests
 from pharos import trusted_control_releases_v014 as trust
 
+V6 = "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
 V4 = "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b"
 V3 = "b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43"
 

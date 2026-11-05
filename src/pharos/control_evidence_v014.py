@@ -260,8 +260,16 @@ def validate_transport_attempts(
 
         for key in ("started_at", "finished_at"):
             value = row[key]
-            if isinstance(value, (pd.Timestamp, _dt.datetime)):
-                row[key] = value.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+            if isinstance(value, pd.Timestamp):
+                value = value.to_pydatetime()
+            if isinstance(value, _dt.datetime) and value.tzinfo is not None:
+                if value.tzinfo is not _dt.timezone.utc:
+                    value = value.astimezone(_dt.timezone.utc)
+                row[key] = value
+            elif isinstance(value, str) and value.endswith("Z"):
+                row[key] = _dt.datetime.fromisoformat(value[:-1]).replace(
+                    tzinfo=_dt.timezone.utc
+                )
         for key in ("http_status", "error_code"):
             if pd.isna(row[key]):
                 row[key] = None

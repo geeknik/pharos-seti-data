@@ -12,15 +12,22 @@ import subprocess
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import pandas as pd
 
+from pharos import control_transport_v014 as transport_module
 from pharos import trusted_control_releases_v014 as trust
 from pharos.control_artifacts_v014 import probe_rename_excl, sha256_file
 from pharos.control_loaders_v014 import LoadedCandidate
-from pharos.control_network_v014 import reject_ambient_network_environment
+from pharos.control_manifests_v014 import append_state_event
+from pharos.control_network_v014 import (
+    CA_BUNDLE_FILENAME,
+    CA_BUNDLE_SHA256,
+    reject_ambient_network_environment,
+)
 from pharos.control_population_v014 import (
+    GAIA_COLUMNS,
     GAIA_LOGICAL_REQUESTS,
     GaiaPlanner,
     GaiaRequestPlan,
@@ -200,3 +207,135 @@ class ReleaseDerivationSession:
             controls,
         )
         return self.state
+
+
+def read_status_authorization(repository: Path) -> dict[str, bool]:
+    """Read the operator authorization boundary; fail closed on any defect.
+
+    AGENTS.md mechanical control: an acquisition entry point must refuse
+    false, missing, or malformed authorization rather than defaulting.
+    """
+    import tomllib
+
+    path = repository / "status.toml"
+    try:
+        document = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PermissionError(f"status boundary unreadable: {type(exc).__name__}") from exc
+    authorization = document.get("authorization")
+    if not isinstance(authorization, dict) or not authorization:
+        raise PermissionError("status boundary has no authorization section")
+    result: dict[str, bool] = {}
+    for key, value in authorization.items():
+        if type(value) is not bool:
+            raise PermissionError(f"authorization key {key!r} is not boolean")
+        result[key] = value
+    return result
+
+
+def require_status_authorization(repository: Path, *keys: str) -> None:
+    authorization = read_status_authorization(repository)
+    missing = [key for key in keys if key not in authorization]
+    if missing:
+        raise PermissionError(f"status boundary lacks authorization keys: {missing}")
+    refused = [key for key in keys if not authorization[key]]
+    if refused:
+        raise PermissionError(f"operator authorization refused: {refused}")
+
+
+def stage_registered_ca_bundle(repository: Path) -> Path:
+    """Stage the environment certifi bundle under its registered name."""
+    import certifi
+
+    destination = repository / "controls" / CA_BUNDLE_FILENAME
+    if destination.exists():
+        return destination
+    source = Path(certifi.where())
+    payload = source.read_bytes()
+    import hashlib
+
+    if hashlib.sha256(payload).hexdigest() != CA_BUNDLE_SHA256:
+        raise PermissionError("environment certifi bundle does not match the registration")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".staging")
+    temporary.write_bytes(payload)
+    temporary.chmod(0o600)
+    temporary.replace(destination)
+    return destination
+
+
+def run_gaia_acquisition(
+    *,
+    publication_parent: Path,
+    ca_bundle_path: Path,
+    transport: Any = transport_module,
+    attempt_id: str | None = None,
+) -> tuple[Path, str]:
+    """Execute the frozen v0.1.4 Gaia acquisition and publish the checkpoint.
+
+    Runs the exact 120-logical-page plan from cursor zero under the frozen
+    transport policy, journals every transport attempt, and no-replace
+    publishes the candidate checkpoint tree. Requires operator authorization
+    and a passing preflight before any network byte moves.
+    """
+    from pharos import control_packaging_v014 as packaging
+
+    require_acquisition_preflight(publication_parent=publication_parent)
+    session = GaiaAcquisitionSession.create()
+    attempt_id = attempt_id or session.attempt_id
+    if attempt_id != session.attempt_id:
+        raise ValueError("explicit attempt id must match the fresh session identity")
+    attempts_root = publication_parent / "attempts"
+    attempts_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    attempt_directory = attempts_root / attempt_id
+    attempt_directory.mkdir(mode=0o700)
+    state_path = attempt_directory / "attempt_state.jsonl"
+    evidence_init = __import__("hashlib").sha256(
+        b"pharos-v0.1.4:" + attempt_id.encode("ascii")
+    ).hexdigest()
+    append_state_event(
+        state_path,
+        attempt_id=attempt_id,
+        to_state="initialized",
+        actor_role="gaia_acquisition_worker",
+        evidence_semantic_sha256=evidence_init,
+    )
+    append_state_event(
+        state_path,
+        attempt_id=attempt_id,
+        to_state="gaia_acquiring",
+        actor_role="gaia_acquisition_worker",
+        evidence_semantic_sha256=evidence_init,
+    )
+    journal = transport.TransportJournal(attempt_id)
+    while True:
+        plan = session.next_request()
+        if plan is None:
+            break
+        spool = transport.execute_tap_async(
+            service="gaia",
+            query_text=plan.query_text,
+            journal=journal,
+            logical_request_id=plan.logical_request_id,
+            attempt_directory=attempt_directory,
+            ca_bundle_path=ca_bundle_path,
+        )
+        decoded = transport.decode_votable_table(spool, GAIA_COLUMNS)
+        session = session.accept(plan, decoded)
+    append_state_event(
+        state_path,
+        attempt_id=attempt_id,
+        to_state="gaia_candidate_complete",
+        actor_role="gaia_acquisition_worker",
+        evidence_semantic_sha256=session.checkpoint_semantic_identity(),
+    )
+    checkpoints_parent = publication_parent / "checkpoints" / "quiet_negative_v0.1.4"
+    checkpoints_parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    checkpoint_path = packaging.publish_gaia_checkpoint(
+        session=session,
+        transport_attempts=journal.to_frame(),
+        attempt_state_bytes=state_path.read_bytes(),
+        output_parent=checkpoints_parent,
+        ca_bundle_path=ca_bundle_path,
+    )
+    return checkpoint_path, attempt_id

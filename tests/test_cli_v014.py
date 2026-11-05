@@ -51,7 +51,7 @@ def test_v014_preflight_passes_with_pinned_reviewer_trust_root(
     assert "reviewer_trust_root" not in output
 
 
-def test_v014_acquisition_role_is_fail_closed_after_local_gate(
+def test_v014_acquisition_role_refuses_without_operator_authorization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[Path] = []
@@ -62,7 +62,9 @@ def test_v014_acquisition_role_is_fail_closed_after_local_gate(
     monkeypatch.setattr(workflow, "require_acquisition_preflight", passed)
     result = cli.cmd_v014_control_acquire(argparse.Namespace(publication_parent="controls"))
     assert result == 2
-    assert calls == [Path(cli.__file__).resolve().parents[2] / "controls"]
+    # The repository status boundary refuses acquisition before any local
+    # gate or network path can run.
+    assert calls == []
 
 
 def test_v014_candidate_review_uses_review_only_loader(

@@ -128,15 +128,29 @@ def cmd_v014_control_preflight(args: argparse.Namespace) -> int:
 
 
 def cmd_v014_control_acquire(args: argparse.Namespace) -> int:
-    """Gate the dedicated Gaia acquisition role; never open a socket here."""
+    """Run the authorized v0.1.4 Gaia acquisition role end to end.
+
+    Refuses unless status.toml grants catalog_acquisition and
+    checkpoint_creation and the frozen local preflight passes.
+    """
+    from pharos.control_provenance_v014 import repository_root
+
     try:
         parent = _v014_publication_parent(args.publication_parent)
-        control_workflow_v014.require_acquisition_preflight(publication_parent=parent)
-    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        control_workflow_v014.require_status_authorization(
+            repository_root(), "catalog_acquisition", "checkpoint_creation"
+        )
+        ca_bundle = control_workflow_v014.stage_registered_ca_bundle(repository_root())
+        checkpoint_path, attempt_id = control_workflow_v014.run_gaia_acquisition(
+            publication_parent=parent,
+            ca_bundle_path=ca_bundle,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError, PermissionError) as exc:
         logger.error("v0.1.4 acquisition role blocked: %s", type(exc).__name__)
         return 2
-    logger.error("v0.1.4 acquisition role has no in-process network transport")
-    return 2
+    print(f"attempt_id: {attempt_id}")
+    print(f"checkpoint: {checkpoint_path}")
+    return 0
 
 
 def cmd_v014_review_candidate(args: argparse.Namespace) -> int:

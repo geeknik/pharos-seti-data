@@ -691,7 +691,7 @@ def execute_tap_async(
     job_doc = _run_with_retries(
         journal=journal,
         logical_request_id=logical_request_id,
-        phase="fetch",
+        phase="poll",
         service=service,
         attempt_directory=attempt_directory,
         spool_basename=f"{logical_request_id}.jobdoc",

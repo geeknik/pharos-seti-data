@@ -12,8 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 PROTECTED_PREREGISTRATION = {
     "pre_registration/FROZEN.md": (
-        5466,
-        "57d6284668cff07e165d5a74c5f3aa655c850b56aaf322288f3cbc3b8caf5fd5",
+        7112,
+        "73137787c7546af78918382d5467df2e9b34d2d825f8c521258637a01d9be8e3",
     ),
     "pre_registration/failed_attempts/v0.1.1_attempt1_calibrated_betas.yaml": (
         1644,
@@ -39,6 +39,10 @@ PROTECTED_PREREGISTRATION = {
         87851,
         "b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43",
     ),
+    "pre_registration/v0.1.4_control_population.md": (
+        17714,
+        "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b",
+    ),
     "pre_registration/v0.1_ir_benchmark.md": (
         10494,
         "ff35549f2ebbb5befd48e07248918fc608992dae54529adc118371249afa0202",
@@ -57,6 +61,15 @@ FORBIDDEN_PUBLIC_CLAIMS = (
     re.compile(r"\balien signal\b", re.IGNORECASE),
     re.compile(r"\bDyson sphere detection\b", re.IGNORECASE),
     re.compile(r"\blikely technology\b", re.IGNORECASE),
+)
+
+# Frozen v0.1.4 Section 3 registers review attestations under
+# pre_registration/reviews/v0.1.4/ with the v0.1.3 Section 20.4 naming pattern.
+# They are the only untracked-by-pin files ever permitted in the inventory.
+REVIEW_ATTESTATION_PATH = re.compile(
+    r"^pre_registration/reviews/v0\.1\.4/"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+    r"\.(raw_checkpoint|final_release)\.yaml$"
 )
 
 
@@ -103,6 +116,19 @@ def test_status_is_strict_and_fail_closed() -> None:
     assert v013["required_supersession"] == "v0.1.4"
     assert len(v013["blockers"]) == 3
 
+    v014 = status["attempts"]["v0_1_4"]
+    assert v014["preregistration_state"] == "frozen"
+    assert v014["implementation_state"] == "not_started"
+    assert v014["acquisition_state"] == "prohibited"
+    assert v014["preregistration_bytes"] == 17714
+    assert v014["preregistration_sha256"] == (
+        "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b"
+    )
+    assert v014["authorized_reviewer_signing_key_sha256"] == [
+        "119b9e83dd61e470b8fa52c2269403b45958a7cfaca7a26e2142478a44fb9f07"
+    ]
+    assert v014["supersedes"] == "v0.1.3 (enumerated provisions only)"
+
     audit = status["dependency_audit"]
     assert audit["passed"] is False
     assert audit["finding_count"] == 17
@@ -115,7 +141,8 @@ def test_complete_preregistration_inventory_is_byte_identical() -> None:
         for path in (ROOT / "pre_registration").rglob("*")
         if path.is_file()
     }
-    assert actual == set(PROTECTED_PREREGISTRATION)
+    extra = actual - set(PROTECTED_PREREGISTRATION)
+    assert all(REVIEW_ATTESTATION_PATH.match(path) for path in extra), sorted(extra)
 
     for relative, (expected_bytes, expected_sha256) in PROTECTED_PREREGISTRATION.items():
         path = ROOT / relative

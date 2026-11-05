@@ -1,5 +1,5 @@
 schema_version = "pharos.project-status.v1"
-as_of_utc = "2026-11-04T23:38:58Z"
+as_of_utc = "2026-11-05T01:30:00Z"
 scientific_state_commit = "246679d4e77d672679a46d23daaa7de6d9d11795"
 
 [governance]
@@ -49,6 +49,18 @@ blockers = [
   "locked_dependency_audit_fails",
 ]
 required_supersession = "v0.1.4"
+
+[attempts.v0_1_4]
+preregistration_state = "frozen"
+implementation_state = "not_started"
+acquisition_state = "prohibited"
+preregistration = "pre_registration/v0.1.4_control_population.md"
+preregistration_bytes = 17714
+preregistration_sha256 = "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b"
+authorized_reviewer_signing_key_sha256 = [
+  "119b9e83dd61e470b8fa52c2269403b45958a7cfaca7a26e2142478a44fb9f07",
+]
+supersedes = "v0.1.3 (enumerated provisions only)"
 
 [dependency_audit]
 passed = false

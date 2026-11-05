@@ -256,13 +256,22 @@ def validate_transport_attempts(
         # Pandas timestamps and nullable scalars are converted into the strict
         # ordinary-Python row consumed by the authoritative boundary.
         row = dict(raw_row)
+        import datetime as _dt
+
         for key in ("started_at", "finished_at"):
             value = row[key]
-            if isinstance(value, pd.Timestamp):
+            if isinstance(value, (pd.Timestamp, _dt.datetime)):
                 row[key] = value.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
         for key in ("http_status", "error_code"):
             if pd.isna(row[key]):
                 row[key] = None
+        status_value = row["http_status"]
+        if isinstance(status_value, float):
+            row["http_status"] = int(status_value)
+        for key in ("transport_ordinal", "peer_port", "redirect_count", "wire_bytes", "decompressed_bytes"):
+            value = row[key]
+            if isinstance(value, float) and value.is_integer():
+                row[key] = int(value)
         validated = validate_transport_attempt(row)
         if validated.attempt_id != attempt_id or validated.logical_request_id not in grouped:
             raise ValueError("transport attempt has wrong attempt/logical request ID")

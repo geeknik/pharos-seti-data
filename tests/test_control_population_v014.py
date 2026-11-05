@@ -107,6 +107,27 @@ def test_gaia_page_rejects_short_reordered_and_forged_snr() -> None:
         v014.normalize_gaia_page(frame, cell=v014.CELLS[0], cursor_before=0, requested_rows=1)
 
 
+def test_tmass_partial_pairs_canonicalize_per_v018() -> None:
+    """Frozen v0.1.8: magnitude-present/uncertainty-null J/H pairs become
+    all-null; the reverse partial still fails closed."""
+    frame = valid_page([11])
+    frame["tmass_j_m"] = pd.Series([9.842], dtype="float64")
+    frame["tmass_j_msigcom"] = pd.Series([np.nan], dtype="float64")
+    normalized = v014.normalize_gaia_page(
+        frame, cell=v014.CELLS[0], cursor_before=0, requested_rows=1
+    )
+    assert np.isnan(normalized["tmass_j_m"].iloc[0])
+    assert np.isnan(normalized["tmass_j_msigcom"].iloc[0])
+
+    reverse = valid_page([12])
+    reverse["tmass_h_m"] = pd.Series([np.nan], dtype="float64")
+    reverse["tmass_h_msigcom"] = pd.Series([0.03], dtype="float64")
+    with pytest.raises(ValueError, match="partial 2MASS"):
+        v014.normalize_gaia_page(
+            reverse, cell=v014.CELLS[0], cursor_before=0, requested_rows=1
+        )
+
+
 def test_optional_w4_registered_missingness_and_malformed_rejection() -> None:
     frame = valid_page([1])
     frame.loc[0, ["w4mpro", "w4mpro_error"]] = [8.0, 1.0857]

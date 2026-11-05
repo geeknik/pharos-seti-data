@@ -650,7 +650,6 @@ def _decode_worker(
     """Parser worker: containment before any table library import/use."""
     try:
         apply_best_effort_address_space_limit()
-        import numpy as np
         from astropy.io.votable import parse
 
         # verify="warn": astropy unit-string pedantry (e.g. log(cm.s**-2)) must

@@ -18,17 +18,18 @@ import numpy as np
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_float_dtype, is_integer_dtype
 
-PREREGISTRATION_SHA256: Final = "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49"
-PREREGISTRATION_BYTES: Final = 4_454
+PREREGISTRATION_SHA256: Final = "9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999"
+PREREGISTRATION_BYTES: Final = 4_936
 # Frozen v0.1.4 Section 5.5: every v0.1.4 tree also packages the incorporated
 # v0.1.3 pre-registration byte-identically under its frozen v0.1.3 digest.
 INCORPORATED_PREREGISTRATION_SHA256S: Final = (
+    "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49",
     "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650",
     "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d",
     "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b",
     "b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43",
 )
-INCORPORATED_PREREGISTRATION_BYTES: Final = (5_679, 5_925, 17_714, 87_851)
+INCORPORATED_PREREGISTRATION_BYTES: Final = (4_454, 5_679, 5_925, 17_714, 87_851)
 TARGET_ROWS: Final = 55_000
 SOURCE_BATCH_ROWS: Final = 500
 CELL_COUNT: Final = 24
@@ -594,15 +595,33 @@ def _canonicalize_w4(frame: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
+def _canonicalize_tmass_pairs(frame: pd.DataFrame) -> pd.DataFrame:
+    """Frozen v0.1.8 Section 2: a 2MASS J/H magnitude present with a null
+    uncertainty — the archive's recorded-magnitude-without-quoted-uncertainty
+    case — canonicalizes to an all-null pair, exactly as the W4 rule
+    canonicalizes its well-formed partial triples. The reverse partial
+    (null magnitude, present uncertainty) still fails closed in domain
+    validation, as does any nonnumeric, infinite, or nonpositive value."""
+    result = frame.copy(deep=True)
+    for band in ("j", "h"):
+        mag = result[f"tmass_{band}_m"]
+        err = result[f"tmass_{band}_msigcom"]
+        eligible = mag.notna() & err.isna()
+        if bool(eligible.any()):
+            result.loc[eligible, f"tmass_{band}_m"] = np.nan
+    return result
+
+
 def normalize_gaia_page(
     decoded: pd.DataFrame, *, cell: Cell, cursor_before: int, requested_rows: int
 ) -> pd.DataFrame:
-    """Validate one complete page and canonicalize only registered W4 missingness."""
+    """Validate one complete page; canonicalize registered W4/2MASS missingness."""
     _exact_columns(decoded, GAIA_COLUMNS, "Gaia decoded page")
     if len(decoded) != requested_rows:
         raise ValueError("Gaia short/zero/overfull page is fatal")
-    _validate_gaia_domains(decoded, cell, cursor_before)
-    normalized = _canonicalize_w4(decoded)
+    canonical = _canonicalize_tmass_pairs(decoded)
+    _validate_gaia_domains(canonical, cell, cursor_before)
+    normalized = _canonicalize_w4(canonical)
     _validate_gaia_domains(normalized, cell, cursor_before)
     w4 = normalized[["w4mpro", "w4mpro_error", "w4snr"]]
     if not (w4.isna().all(axis=1) | w4.notna().all(axis=1)).all():

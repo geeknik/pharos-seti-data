@@ -13,6 +13,7 @@ from pharos import control_loaders_v014 as loaders
 from pharos import control_manifests_v014 as manifests
 from pharos import trusted_control_releases_v014 as trust
 
+V7 = "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49"
 V6 = "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
 V4 = "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b"
 V3 = "b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43"
@@ -187,6 +188,7 @@ def test_incorporated_preregistrations_are_pinned_to_frozen_digests() -> None:
     """Frozen v0.1.5 Section 2.2: exactly v0.1.4 then v0.1.3, hash-bound."""
     V5 = "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d"
     entries = [
+        {"path": f"pre_registration.v0.1.7.{V7}.md", "byte_sha256": V7},
         {"path": f"pre_registration.v0.1.6.{V6}.md", "byte_sha256": V6},
         {"path": f"pre_registration.v0.1.5.{V5}.md", "byte_sha256": V5},
         {"path": f"pre_registration.v0.1.4.{V4}.md", "byte_sha256": V4},
@@ -195,7 +197,7 @@ def test_incorporated_preregistrations_are_pinned_to_frozen_digests() -> None:
     base: dict[str, object] = {"incorporated_pre_registrations": entries}
     manifests._validate_incorporated_preregistration(base)
     for mutation in (
-        {"incorporated_pre_registrations": entries[:3]},
+        {"incorporated_pre_registrations": entries[:4]},
         {"incorporated_pre_registrations": list(reversed(entries))},
         {"incorporated_pre_registrations": [{"path": "../escape.md", "byte_sha256": V4}, *entries[1:]]},
         {"incorporated_pre_registrations": [dict(entries[0], byte_sha256="0" * 64), *entries[1:]]},
@@ -278,7 +280,7 @@ def test_review_attestation_cannot_pass_empty_trust_root() -> None:
         "candidate_commit": "1" * 40,
         "candidate_manifest_path": "controls/checkpoint_manifest.yaml",
         "candidate_manifest_byte_sha256": "2" * 64,
-        "pre_registration_byte_sha256": "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49",
+        "pre_registration_byte_sha256": "9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999",
         "reviewer_identity": "reviewer",
         "reviewer_signing_key_sha256": "3" * 64,
         "reviewed_at_utc": "2026-08-06T00:00:00.000000Z",

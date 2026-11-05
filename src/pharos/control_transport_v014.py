@@ -419,6 +419,16 @@ def _run_with_retries(
             error_code=None if succeeded else (error_code or decision.error_code),
         )
         if decision.disposition is not RetryDisposition.RETRY:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "transport phase failed: request=%s phase=%s attempt=%d status=%s code=%s",
+                logical_request_id,
+                phase,
+                operation_attempt,
+                status,
+                error_code or decision.error_code,
+            )
             raise NetworkBoundaryError(BoundaryErrorCode.RETRY_POLICY)
         time.sleep(decision.wait_seconds or 0)
         operation_attempt += 1

@@ -27,7 +27,6 @@ from pharos.control_network_v014 import (
     reject_ambient_network_environment,
 )
 from pharos.control_population_v014 import (
-    GAIA_COLUMNS,
     GAIA_LOGICAL_REQUESTS,
     GaiaPlanner,
     GaiaRequestPlan,
@@ -325,7 +324,7 @@ def run_gaia_acquisition(
         decoded = transport.decode_votable_table(
             spool,
             tuple(
-                (column.name, column.logical, column.nullable)
+                (column.name, column.logical_type, column.nullable)
                 for column in GAIA_TABLE_COLUMNS
             ),
         )

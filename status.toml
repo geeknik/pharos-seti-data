@@ -71,6 +71,15 @@ preregistration_bytes = 5925
 preregistration_sha256 = "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d"
 supersedes = "v0.1.4 (release-platform identity only)"
 
+[attempts.v0_1_6]
+preregistration_state = "frozen"
+implementation_state = "not_started"
+acquisition_state = "prohibited"
+preregistration = "pre_registration/v0.1.6_tls_policy_repair.md"
+preregistration_bytes = 5679
+preregistration_sha256 = "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
+supersedes = "v0.1.5 (transport TLS policy only)"
+
 [dependency_audit]
 passed = true
 checked_at_utc = "2026-11-05T01:40:00Z"

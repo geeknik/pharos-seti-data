@@ -191,7 +191,7 @@ ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b  pre_registrati
 | Date frozen | 2026-11-05 |
 | Status | FROZEN |
 | Supersedes | the release-platform identity values registered through v0.1.4 Section 5.3 only (CPython 3.14.6 / macOS 27.0 / build 26A5388g / kernel 27.0.0 / OpenSSL 3.6.3) |
-| Superseded by | (none) |
+| Superseded by | v0.1.6 (transport TLS policy only) |
 
 ### Freeze record
 
@@ -213,4 +213,50 @@ Expected output:
 
 ```text
 7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d  pre_registration/v0.1.5_platform_repair.md
+```
+
+---
+
+## v0.1.6 — Transport TLS Policy Repair
+
+| Field | Value |
+|---|---|
+| Document | [`v0.1.6_tls_policy_repair.md`](v0.1.6_tls_policy_repair.md) |
+| Date frozen | 2026-11-05 |
+| Status | FROZEN |
+| Supersedes | the transport TLS policy provisions of the effective protocol only (TLS 1.3 mandatory; evidence and limits fields pinned to TLSv1.3) |
+| Superseded by | (none) |
+
+### Freeze record
+
+| Stage | Date | File size | SHA-256 |
+|---|---|---:|---|
+| Initial freeze | 2026-11-05 | 5,679 bytes | `54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650` |
+
+### Supporting disposition record
+
+The first v0.1.5-registered Gaia attempt failed closed before any request
+completed: the registered endpoint refused all OpenSSL TLS 1.3 handshakes
+(alert 40) while completing TLS 1.2 ECDHE-AES-GCM under the same CA validation.
+Its immutable record is preserved for audit:
+
+| Field | Value |
+|---|---|
+| Document | [`failed_attempts/v0.1.5_gaia_tls13_endpoint_refusal.md`](failed_attempts/v0.1.5_gaia_tls13_endpoint_refusal.md) |
+| Date recorded | 2026-11-05 |
+| Status | FAILED BEFORE ANY REQUEST — no data acquired; nothing reusable |
+| File size | 2,370 bytes |
+| SHA-256 | `5f4e96eefda12aea3b8ab4e1fefdaafe007dbbb3e533cf145ac3f89f86d28c6c` |
+
+### Verification command
+
+```sh
+shasum -a 256 pre_registration/v0.1.6_tls_policy_repair.md pre_registration/failed_attempts/v0.1.5_gaia_tls13_endpoint_refusal.md
+```
+
+Expected output:
+
+```text
+54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650  pre_registration/v0.1.6_tls_policy_repair.md
+5f4e96eefda12aea3b8ab4e1fefdaafe007dbbb3e533cf145ac3f89f86d28c6c  pre_registration/failed_attempts/v0.1.5_gaia_tls13_endpoint_refusal.md
 ```

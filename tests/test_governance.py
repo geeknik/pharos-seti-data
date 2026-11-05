@@ -10,8 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-FROZEN_BYTES = 8327
-FROZEN_SHA256 = "094f946677e08e195c90640179deabb6904241099f8fccbb018b6a0aa50325db"
+FROZEN_BYTES = 10057
+FROZEN_SHA256 = "487b74515748f814c66303e03c451ad260fe90935e76009c8cfd182a34402720"
 
 PROTECTED_PREREGISTRATION = {
     "pre_registration/FROZEN.md": (
@@ -25,6 +25,10 @@ PROTECTED_PREREGISTRATION = {
     "pre_registration/failed_attempts/v0.1.1_attempt1_failure_record.md": (
         7340,
         "54d873dbb7c52ce3c185a0c400b158f98b5e6ed4d0c478b5edabe76c471f88fb",
+    ),
+    "pre_registration/failed_attempts/v0.1.5_gaia_tls13_endpoint_refusal.md": (
+        2370,
+        "5f4e96eefda12aea3b8ab4e1fefdaafe007dbbb3e533cf145ac3f89f86d28c6c",
     ),
     "pre_registration/failed_attempts/v0.1.2_hardened_control_population.md": (
         15481,
@@ -49,6 +53,10 @@ PROTECTED_PREREGISTRATION = {
     "pre_registration/v0.1.5_platform_repair.md": (
         5925,
         "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d",
+    ),
+    "pre_registration/v0.1.6_tls_policy_repair.md": (
+        5679,
+        "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650",
     ),
     "pre_registration/v0.1_ir_benchmark.md": (
         10494,
@@ -144,6 +152,15 @@ def test_status_is_strict_and_fail_closed() -> None:
         "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d"
     )
     assert v015["supersedes"] == "v0.1.4 (release-platform identity only)"
+
+    v016 = status["attempts"]["v0_1_6"]
+    assert v016["preregistration_state"] == "frozen"
+    assert v016["implementation_state"] == "not_started"
+    assert v016["acquisition_state"] == "prohibited"
+    assert v016["preregistration_sha256"] == (
+        "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
+    )
+    assert v016["supersedes"] == "v0.1.5 (transport TLS policy only)"
 
     audit = status["dependency_audit"]
     assert audit["passed"] is True

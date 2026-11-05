@@ -379,13 +379,19 @@ def run_gaia_acquisition(
             ),
         )
         session = session.accept(plan, decoded)
-    append_state_event(
-        state_path,
-        attempt_id=attempt_id,
-        to_state="gaia_candidate_complete",
-        actor_role="gaia_acquisition_worker",
-        evidence_semantic_sha256=session.checkpoint_semantic_identity(),
-    )
+    import json as _json
+
+    existing_events = [
+        _json.loads(line) for line in state_path.read_text(encoding="utf-8").splitlines()
+    ]
+    if not existing_events or existing_events[-1]["to_state"] != "gaia_candidate_complete":
+        append_state_event(
+            state_path,
+            attempt_id=attempt_id,
+            to_state="gaia_candidate_complete",
+            actor_role="gaia_acquisition_worker",
+            evidence_semantic_sha256=session.checkpoint_semantic_identity(),
+        )
     checkpoints_parent = publication_parent / "checkpoints" / "quiet_negative_v0.1.4"
     checkpoints_parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     checkpoint_path = packaging.publish_gaia_checkpoint(

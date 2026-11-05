@@ -442,6 +442,12 @@ def _run_with_retries(
 ) -> _ExchangeResult:
     """Execute one transport phase under the exact frozen retry policy."""
     hostname = policy_host(service)
+    # Failed pre-connection attempts still record the exact validated public
+    # peer they targeted; the evidence schema admits no placeholder addresses.
+    try:
+        targeted_peer = resolve_public_addresses(hostname)[0]
+    except NetworkBoundaryError:
+        targeted_peer = ""
     operation_attempt = 1
     # Resumed requests must not collide with spool files written by earlier
     # processes of the same attempt; offset try-numbers by prior evidence.
@@ -500,7 +506,7 @@ def _run_with_retries(
             outcome=outcome,
             status=status,
             hostname=hostname,
-            peer_ip=result.peer_ip if result else "0.0.0.0",
+            peer_ip=result.peer_ip if result else (targeted_peer or "0.0.0.0"),
             leaf_certificate_sha256=(
                 result.leaf_certificate_sha256 if result else "0" * 64
             ),

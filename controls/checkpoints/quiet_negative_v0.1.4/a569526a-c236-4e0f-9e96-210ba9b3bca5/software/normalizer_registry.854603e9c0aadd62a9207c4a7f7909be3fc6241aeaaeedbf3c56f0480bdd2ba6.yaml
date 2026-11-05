@@ -1,0 +1,44 @@
+schema_version: pharos.normalizer-registry.v1
+pre_registration_sha256: 9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999
+semantic_hash_algorithm: pharos-semantic-frame-le-v1
+entries:
+- ordinal: 0
+  normalization_id: gaia-page-normalize-v014
+  source_member_path: src/pharos/control_population_v014.py
+  callable_name: normalize_gaia_page
+  source_file_sha256: 0538abdb569da23bafc608e3200bb9d8dad2a4306056fc3e0639217ea29c8508
+  input_schema: pharos.gaia-decoded-page.v0.1.4
+  output_schema: pharos.gaia-normalized-page.v0.1.4
+  parameter_binding_sha256: 9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999
+- ordinal: 1
+  normalization_id: bp-rp-derive-v014
+  source_member_path: src/pharos/control_population_v014.py
+  callable_name: derive_bp_rp_survivors
+  source_file_sha256: 0538abdb569da23bafc608e3200bb9d8dad2a4306056fc3e0639217ea29c8508
+  input_schema: pharos.quiet-negative-raw.v0.1.4
+  output_schema: pharos.quiet-negative-bp-rp.v0.1.4
+  parameter_binding_sha256: 9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999
+- ordinal: 2
+  normalization_id: simbad-local-exclusion-v014
+  source_member_path: src/pharos/control_population_v014.py
+  callable_name: normalize_simbad_exclusions
+  source_file_sha256: 0538abdb569da23bafc608e3200bb9d8dad2a4306056fc3e0639217ea29c8508
+  input_schema: pharos.simbad-decoded-raw.v0.1.4
+  output_schema: pharos.quiet-negative-exclusions.v0.1.4
+  parameter_binding_sha256: 9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999
+- ordinal: 3
+  normalization_id: chen-local-exclusion-v014
+  source_member_path: src/pharos/control_population_v014.py
+  callable_name: match_chen_exclusions
+  source_file_sha256: 0538abdb569da23bafc608e3200bb9d8dad2a4306056fc3e0639217ea29c8508
+  input_schema: pharos.chen-decoded-raw.v0.1.4
+  output_schema: pharos.quiet-negative-exclusions.v0.1.4
+  parameter_binding_sha256: 9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999
+- ordinal: 4
+  normalization_id: final-difference-v014
+  source_member_path: src/pharos/control_population_v014.py
+  callable_name: derive_quiet_negative
+  source_file_sha256: 0538abdb569da23bafc608e3200bb9d8dad2a4306056fc3e0639217ea29c8508
+  input_schema: pharos.quiet-negative-bp-rp.v0.1.4
+  output_schema: pharos.quiet-negative.v0.1.4
+  parameter_binding_sha256: 9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999

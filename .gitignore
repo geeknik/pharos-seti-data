@@ -73,3 +73,6 @@ HANDOFF.md
 
 # v0.1.4 acquisition attempt spool/state (local quarantine, never release payloads)
 controls/attempts/
+
+# Registered v0.1.4 Gaia candidate checkpoint (frozen workflow step 4)
+!controls/checkpoints/quiet_negative_v0.1.4/**

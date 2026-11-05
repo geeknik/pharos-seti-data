@@ -1,0 +1,99 @@
+SELECT TOP 292
+  gs.source_id AS gaia_dr3_source_id,
+  gs.ra,
+  gs.dec,
+  gs.l AS galactic_l,
+  gs.b AS galactic_b,
+  gs.parallax,
+  gs.parallax_error,
+  gs.parallax_over_error,
+  gs.pmra,
+  gs.pmdec,
+  gs.ruwe,
+  gs.astrometric_excess_noise,
+  gs.astrometric_excess_noise_sig,
+  gs.phot_g_mean_mag,
+  gs.phot_bp_rp_excess_factor,
+  gs.ipd_frac_multi_peak,
+  gs.ipd_frac_odd_win,
+  gs.duplicated_source,
+  gs.non_single_star,
+  gs.classprob_dsc_combmod_quasar AS qso_probability,
+  gs.classprob_dsc_combmod_galaxy AS galaxy_probability,
+  gs.teff_gspphot,
+  gs.logg_gspphot,
+  gs.distance_gspphot,
+  gs.ag_gspphot,
+  awbn.angular_distance AS wise_xm_angular_distance,
+  awbn.number_of_neighbours AS wise_xm_n_neighbours,
+  awbn.number_of_mates AS wise_xm_n_mates,
+  awbn.xm_flag AS wise_xm_flag,
+  aw.designation AS allwise_designation,
+  aw.w1mpro,
+  aw.w1mpro_error,
+  (1.0857 / aw.w1mpro_error) AS w1snr,
+  aw.w2mpro,
+  aw.w2mpro_error,
+  (1.0857 / aw.w2mpro_error) AS w2snr,
+  aw.w3mpro,
+  aw.w3mpro_error,
+  (1.0857 / aw.w3mpro_error) AS w3snr,
+  aw.w4mpro,
+  aw.w4mpro_error,
+  (1.0857 / aw.w4mpro_error) AS w4snr,
+  aw.cc_flags AS allwise_cc_flags,
+  aw.ext_flag AS allwise_ext_flg,
+  tmbn.angular_distance AS tmass_xm_angular_distance,
+  tm.designation AS tmass_designation,
+  tm.j_m AS tmass_j_m,
+  tm.j_msigcom AS tmass_j_msigcom,
+  tm.h_m AS tmass_h_m,
+  tm.h_msigcom AS tmass_h_msigcom,
+  tm.ks_m AS tmass_ks_m,
+  tm.ks_msigcom AS tmass_ks_msigcom
+FROM gaiadr3.gaia_source AS gs
+  LEFT JOIN gaiadr3.allwise_best_neighbour AS awbn ON gs.source_id = awbn.source_id
+  LEFT JOIN gaiadr1.allwise_original_valid AS aw ON awbn.original_ext_source_id = aw.designation
+  LEFT JOIN gaiadr3.tmass_psc_xsc_best_neighbour AS tmbn ON gs.source_id = tmbn.source_id
+  LEFT JOIN gaiadr1.tmass_original_valid AS tm ON tmbn.original_ext_source_id = tm.designation
+WHERE
+  gs.parallax_over_error >= 5.0
+  AND gs.parallax > 0
+  AND gs.parallax >= 5.000000
+  AND gs.parallax_error > 0
+  AND gs.phot_g_mean_mag >= -10.0
+  AND gs.phot_g_mean_mag <= 18.0
+  AND gs.phot_bp_rp_excess_factor >= 0.0
+  AND gs.phot_bp_rp_excess_factor <= 100.0
+  AND gs.ruwe < 1.2
+  AND gs.duplicated_source = 'false'
+  AND gs.non_single_star = 0
+  AND gs.classprob_dsc_combmod_galaxy < 0.1
+  AND gs.classprob_dsc_combmod_quasar < 0.1
+  AND ABS(gs.b) > 20.0
+  AND awbn.angular_distance <= 1.5
+  AND awbn.number_of_neighbours = 1
+  AND awbn.number_of_mates = 0
+  AND aw.designation IS NOT NULL
+  AND aw.w1mpro IS NOT NULL
+  AND aw.w2mpro IS NOT NULL
+  AND aw.w3mpro IS NOT NULL
+  AND aw.w1mpro_error > 0
+  AND aw.w2mpro_error > 0
+  AND aw.w3mpro_error > 0
+  AND aw.w1mpro_error <= 0.217140
+  AND aw.w2mpro_error <= 0.217140
+  AND aw.w3mpro_error <= 0.361900
+  AND (aw.cc_flags IS NULL OR aw.cc_flags = '0000')
+  AND (aw.ext_flag IS NULL OR aw.ext_flag = 0)
+  AND tmbn.angular_distance <= 1.5
+  AND tm.designation IS NOT NULL
+  AND tm.ks_m IS NOT NULL
+  AND tm.ks_msigcom > 0
+  AND gs.teff_gspphot >= 1.0
+  AND gs.teff_gspphot <= 100000.0
+  AND gs.source_id > 1920375024456314624
+  AND gs.l >= 90.0
+  AND gs.l < 120.0
+  AND gs.b < -20.0
+ORDER BY gs.source_id

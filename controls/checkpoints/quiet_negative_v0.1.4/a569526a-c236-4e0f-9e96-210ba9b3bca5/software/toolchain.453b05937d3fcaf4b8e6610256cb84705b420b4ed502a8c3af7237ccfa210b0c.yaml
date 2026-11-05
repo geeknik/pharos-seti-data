@@ -1,0 +1,24 @@
+schema_version: pharos.toolchain.v1
+python_implementation: CPython
+python_version: 3.14.10
+uv_version: 0.11.12
+os_name: macOS
+os_version: '27.3'
+os_build: 26C5035r
+kernel_release: 27.3.0
+architecture: arm64
+openssl_version: OpenSSL 4.1.0 23 Oct 2026
+libc_math_runtime_identity: libSystem.B.dylib@running-signed-dyld-shared-cache
+libc_math_runtime_sha256: null
+dyld_shared_cache_uuid: 8b1e17c6-72d6-3017-91a4-916022e3612e
+pandas_version: 3.0.5
+pyarrow_version: 25.0.0
+numpy_version: 2.5.1
+pyyaml_version: 6.0.3
+astropy_version: 8.0.1
+astroquery_version: 0.4.11
+certifi_version: 2026.10.18
+ca_bundle_bytes: 234072
+ca_bundle_sha256: d87887200c9a705dccc937b9b83b5e67e47024c4a4b7f9dd15700c72e0f55453
+parquet_format_version: '2.6'
+parquet_writer_profile: pharos-parquet-v014

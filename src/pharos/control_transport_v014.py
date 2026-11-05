@@ -264,7 +264,8 @@ def _phase_exchange(
         connection.endheaders(message_body=body)
         connection.sock.settimeout(RESPONSE_HEADER_TIMEOUT_SECONDS)
         response = connection.getresponse()
-        connection.sock.settimeout(BODY_READ_TIMEOUT_SECONDS)
+        if connection.sock is not None:
+            connection.sock.settimeout(BODY_READ_TIMEOUT_SECONDS)
         status = int(response.status)
         location = response.getheader("Location")
         if status in (301, 302, 303, 307, 308):
@@ -312,6 +313,8 @@ def _phase_exchange(
         return None, None, "timeout"
     except (ConnectionError, ssl.SSLEOFError, ssl.SSLZeroReturnError):
         return None, None, "tls_close_notify_loss"
+    except AttributeError:
+        return None, None, "connection_reset"
     except (ssl.SSLError, http.client.HTTPException, OSError):
         return None, None, "connection_reset"
     finally:

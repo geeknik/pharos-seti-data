@@ -16,6 +16,7 @@ there is no silent truncation, fallback endpoint, or ambient-credential path.
 from __future__ import annotations
 
 import hashlib
+import re
 import http.client
 import multiprocessing
 import socket
@@ -586,11 +587,43 @@ def execute_tap_async(
         if phase_text in ("ERROR", "ABORTED"):
             raise ValueError("tap job reached a terminal error phase")
 
+    def jobdoc_exchange(spool_name: str) -> tuple[_ExchangeResult | None, int | None, str | None]:
+        return _phase_exchange(
+            service=service,
+            method="GET",
+            path=job_path,
+            body=None,
+            headers={"User-Agent": "pharos-v0.1.4-control-population/1.0"},
+            attempt_directory=attempt_directory,
+            spool_filename=spool_name,
+            ca_bundle_path=ca_bundle_path,
+            allow_location_status=False,
+        )
+
+    job_doc = _run_with_retries(
+        journal=journal,
+        logical_request_id=logical_request_id,
+        phase="fetch",
+        service=service,
+        attempt_directory=attempt_directory,
+        spool_basename=f"{logical_request_id}.jobdoc",
+        ca_bundle_path=ca_bundle_path,
+        exchange_callable=jobdoc_exchange,
+    )
+    match = re.search(
+        rb"<uws:result[^>]*xlink:href=\"([^""]+)\"",
+        job_doc.spool_path.read_bytes(),
+    )
+    if match is None:
+        raise ValueError("completed tap job exposes no result href")
+    result_url = validate_async_job_url(service, match.group(1).decode("ascii"))
+    result_path = urllib.parse.urlsplit(result_url).path
+
     def fetch_exchange(spool_name: str) -> tuple[_ExchangeResult | None, int | None, str | None]:
         return _phase_exchange(
             service=service,
             method="GET",
-            path=job_path + "/result",
+            path=result_path,
             body=None,
             headers={"User-Agent": "pharos-v0.1.4-control-population/1.0"},
             attempt_directory=attempt_directory,

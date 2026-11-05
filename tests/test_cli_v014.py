@@ -60,10 +60,15 @@ def test_v014_acquisition_role_refuses_without_operator_authorization(
         calls.append(publication_parent)
 
     monkeypatch.setattr(workflow, "require_acquisition_preflight", passed)
+
+    def refused(repository: Path, *keys: str) -> None:
+        raise PermissionError("operator authorization refused: simulated")
+
+    monkeypatch.setattr(workflow, "require_status_authorization", refused)
     result = cli.cmd_v014_control_acquire(argparse.Namespace(publication_parent="controls"))
     assert result == 2
-    # The repository status boundary refuses acquisition before any local
-    # gate or network path can run.
+    # The status boundary refuses acquisition before any local gate or
+    # network path can run.
     assert calls == []
 
 

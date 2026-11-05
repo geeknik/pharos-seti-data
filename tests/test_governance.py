@@ -66,6 +66,10 @@ PROTECTED_PREREGISTRATION = {
         4936,
         "9c1751721a2021c632a8a86cfab6a67e1f23e1bcc84973a25dc156b2b5bc7999",
     ),
+    "pre_registration/failed_attempts/v0.1.8_accidental_test_triggered_attempts.md": (
+        1404,
+        "e5955ef0b95bcbfec9bf04c710851486c1829302a383bdcc743410ac009cca47",
+    ),
     "pre_registration/failed_attempts/v0.1.8_tmass_partial_pairs.md": (
         1951,
         "4d5631f0b175558365fe874cb495b8a79ef2c4a79a30cce05bb6fb73a01eb390",

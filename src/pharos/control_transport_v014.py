@@ -610,10 +610,7 @@ def execute_tap_async(
         ca_bundle_path=ca_bundle_path,
         exchange_callable=jobdoc_exchange,
     )
-    match = re.search(
-        rb"<uws:result[^>]*xlink:href=\"([^""]+)\"",
-        job_doc.spool_path.read_bytes(),
-    )
+    match = re.search(rb'<uws:result[^>]*xlink:href="([^"]+)"', job_doc.spool_path.read_bytes())
     if match is None:
         raise ValueError("completed tap job exposes no result href")
     result_url = validate_async_job_url(service, match.group(1).decode("ascii"))

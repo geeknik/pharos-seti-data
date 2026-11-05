@@ -105,7 +105,8 @@ LIMITS_ITEMS: Final = (
     ("redirects_max", 0),
     ("peer_port", 443),
     ("ca_bundle_bytes", 234072),
-    ("tls_version", "TLSv1.3"),
+    ("tls_version_min", "TLSv1.2"),
+    ("tls_version_max", "TLSv1.3"),
     ("ca_bundle_sha256", "d87887200c9a705dccc937b9b83b5e67e47024c4a4b7f9dd15700c72e0f55453"),
     ("allowed_hostnames", ["gea.esac.esa.int", "simbad.cds.unistra.fr", "vizier.cds.unistra.fr"]),
 )
@@ -423,8 +424,10 @@ def _validate_incorporated_preregistration(record: Mapping[str, object]) -> None
     """Frozen v0.1.5 Section 2.2: the packaged v0.1.4 and v0.1.3 copies are
     hash-bound as an ordered two-entry list."""
     entries = record["incorporated_pre_registrations"]
-    if not isinstance(entries, list) or len(entries) != 2:
-        raise ValueError("incorporated pre-registrations must list exactly two entries")
+    if not isinstance(entries, list) or len(entries) != len(
+        INCORPORATED_PREREGISTRATION_SHA256S
+    ):
+        raise ValueError("incorporated pre-registrations must list every frozen predecessor")
     for entry, registered in zip(entries, INCORPORATED_PREREGISTRATION_SHA256S, strict=True):
         if not isinstance(entry, dict) or tuple(entry.keys()) != (
             "path",

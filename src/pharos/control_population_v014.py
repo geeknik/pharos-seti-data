@@ -18,15 +18,16 @@ import numpy as np
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_float_dtype, is_integer_dtype
 
-PREREGISTRATION_SHA256: Final = "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d"
-PREREGISTRATION_BYTES: Final = 5_925
+PREREGISTRATION_SHA256: Final = "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
+PREREGISTRATION_BYTES: Final = 5_679
 # Frozen v0.1.4 Section 5.5: every v0.1.4 tree also packages the incorporated
 # v0.1.3 pre-registration byte-identically under its frozen v0.1.3 digest.
 INCORPORATED_PREREGISTRATION_SHA256S: Final = (
+    "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d",
     "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b",
     "b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43",
 )
-INCORPORATED_PREREGISTRATION_BYTES: Final = (17_714, 87_851)
+INCORPORATED_PREREGISTRATION_BYTES: Final = (5_925, 17_714, 87_851)
 TARGET_ROWS: Final = 55_000
 SOURCE_BATCH_ROWS: Final = 500
 CELL_COUNT: Final = 24

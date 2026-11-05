@@ -93,6 +93,7 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         self._dns_answers = dns_answers
         self.peer_ip: str | None = None
         self.leaf_certificate_der: bytes | None = None
+        self.negotiated_tls_version: str | None = None
 
     def connect(self) -> None:  # noqa: D102 - http.client hook
         if not self._dns_answers:
@@ -136,6 +137,7 @@ class _ExchangeResult:
     decompressed_sha256: str
     peer_ip: str
     leaf_certificate_sha256: str
+    tls_version: str
 
 
 class TransportJournal:
@@ -181,7 +183,7 @@ class TransportJournal:
                 peer_ip=peer_ip,
                 peer_port=PEER_PORT,
                 leaf_certificate_sha256=leaf_certificate_sha256,
-                tls_version="TLSv1.3",
+                tls_version=exchange.tls_version if exchange else "TLSv1.3",
                 redirect_count=0,
                 wire_bytes=exchange.wire_bytes if exchange else 0,
                 decompressed_bytes=exchange.decompressed_bytes if exchange else 0,
@@ -301,6 +303,7 @@ def _phase_exchange(
             decompressed_sha256=spool.decompressed_sha256,
             peer_ip=connection.peer_ip or "",
             leaf_certificate_sha256=leaf,
+            tls_version=connection.negotiated_tls_version or "TLSv1.3",
         )
         return result, status, None
     except NetworkBoundaryError:

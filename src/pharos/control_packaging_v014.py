@@ -242,22 +242,24 @@ def publish_gaia_checkpoint(
         manifest_name="checkpoint_manifest.yaml",
     )
     try:
-        prereg = (repository_root() / "pre_registration/v0.1.5_platform_repair.md").read_bytes()
+        prereg = (repository_root() / "pre_registration/v0.1.6_tls_policy_repair.md").read_bytes()
         packaged_prereg = _write_text(
             writer,
-            f"pre_registration.v0.1.5.{PREREGISTRATION_SHA256}.md",
+            f"pre_registration.v0.1.6.{PREREGISTRATION_SHA256}.md",
             prereg,
-            schema_version="pharos.pre-registration.v0.1.5",
+            schema_version="pharos.pre-registration.v0.1.6",
         )
         # Frozen v0.1.5 Section 2.2: package the incorporated v0.1.4 and
         # v0.1.3 documents byte-identically so the effective protocol is
         # self-contained from the release tree alone.
         incorporated_preregs = []
         for version, digest in (
-            ("v0.1.4", INCORPORATED_PREREGISTRATION_SHA256S[0]),
-            ("v0.1.3", INCORPORATED_PREREGISTRATION_SHA256S[1]),
+            ("v0.1.5", INCORPORATED_PREREGISTRATION_SHA256S[0]),
+            ("v0.1.4", INCORPORATED_PREREGISTRATION_SHA256S[1]),
+            ("v0.1.3", INCORPORATED_PREREGISTRATION_SHA256S[2]),
         ):
             stem = {
+                "v0.1.5": "v0.1.5_platform_repair.md",
                 "v0.1.4": "v0.1.4_control_population.md",
                 "v0.1.3": "v0.1.3_control_population.md",
             }[version]

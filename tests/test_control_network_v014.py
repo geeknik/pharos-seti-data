@@ -66,9 +66,9 @@ def _valid_transport_row() -> dict[str, object]:
 
 
 def test_frozen_identity_endpoints_timeouts_and_resource_constants_are_exact() -> None:
-    assert network.PREREGISTRATION_BYTES == 5_925
+    assert network.PREREGISTRATION_BYTES == 5_679
     assert network.PREREGISTRATION_SHA256 == (
-        "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d"
+        "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
     )
     assert tuple(network.ENDPOINT_POLICIES) == ("gaia", "simbad", "chen")
     assert [policy.endpoint for policy in network.ENDPOINT_POLICIES.values()] == [
@@ -220,8 +220,12 @@ def test_registered_ca_bundle_builds_tls13_only_context(
     assert hashlib.sha256(data).hexdigest() == network.CA_BUNDLE_SHA256
 
     context = network.create_tls13_context(ca_path)
-    assert context.minimum_version is ssl.TLSVersion.TLSv1_3
+    assert context.minimum_version is ssl.TLSVersion.TLSv1_2
     assert context.maximum_version is ssl.TLSVersion.TLSv1_3
+    assert all(
+        "CBC" not in cipher and "RC4" not in cipher
+        for cipher in context.get_ciphers()
+    )
     assert context.check_hostname is True
     assert context.verify_mode == ssl.CERT_REQUIRED
     assert context.options & ssl.OP_NO_COMPRESSION
@@ -301,7 +305,7 @@ def test_dns_and_connected_peer_require_public_answer_membership_and_tls13() -> 
         {"peer_ip": "1.1.1.1"},
         {"peer_ip": "127.0.0.1"},
         {"peer_port": 80},
-        {"tls_version": "TLSv1.2"},
+        {"tls_version": "TLSv1.0"},
         {"leaf_certificate_der": b""},
     ):
         arguments: dict[str, Any] = {
@@ -560,7 +564,7 @@ def test_transport_attempt_exact_schema_accepts_valid_record() -> None:
         ("peer_ip", "2606:4700:4700:0:0:0:0:1111"),
         ("peer_port", 80),
         ("leaf_certificate_sha256", "A" * 64),
-        ("tls_version", "TLSv1.2"),
+        ("tls_version", "TLSv1.0"),
         ("redirect_count", 1),
         ("wire_bytes", 33_554_433),
         ("decompressed_bytes", 67_108_865),

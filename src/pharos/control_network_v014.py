@@ -29,11 +29,21 @@ from typing import Any, Final, Literal, NoReturn, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
-PREREGISTRATION_SHA256: Final = "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d"
-PREREGISTRATION_BYTES: Final = 5_925
+PREREGISTRATION_SHA256: Final = "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
+PREREGISTRATION_BYTES: Final = 5_679
 
 PEER_PORT: Final = 443
 TLS_VERSION: Final = "TLSv1.3"
+# Frozen v0.1.6 Section 2.1: TLS 1.2 floor / 1.3 ceiling, AEAD-only.
+TLS_VERSION_MIN: Final = "TLSv1.2"
+TLS_VERSION_MAX: Final = "TLSv1.3"
+TLS_VERSIONS: Final = ("TLSv1.3", "TLSv1.2")
+TLS12_AEAD_CIPHERS: Final = (
+    "ECDHE-ECDSA-AES256-GCM-SHA384"
+    ":ECDHE-ECDSA-AES128-GCM-SHA256"
+    ":ECDHE-RSA-AES256-GCM-SHA384"
+    ":ECDHE-RSA-AES128-GCM-SHA256"
+)
 CA_BUNDLE_BYTES: Final = 234_072
 CA_BUNDLE_SHA256: Final = "d87887200c9a705dccc937b9b83b5e67e47024c4a4b7f9dd15700c72e0f55453"
 CA_BUNDLE_FILENAME: Final = f"ca_bundle.{CA_BUNDLE_SHA256}.pem"
@@ -361,7 +371,7 @@ def validate_connected_peer(
     canonical = _canonical_public_ip(peer_ip, BoundaryErrorCode.PEER_POLICY)
     if type(peer_port) is not int or peer_port != PEER_PORT or canonical not in dns_answers:
         _raise(BoundaryErrorCode.PEER_POLICY)
-    if type(tls_version) is not str or tls_version != TLS_VERSION:
+    if type(tls_version) is not str or tls_version not in TLS_VERSIONS:
         _raise(BoundaryErrorCode.TLS_POLICY)
     if type(leaf_certificate_der) is not bytes or len(leaf_certificate_der) == 0:
         _raise(BoundaryErrorCode.TLS_POLICY)
@@ -459,17 +469,18 @@ def load_registered_ca_bundle(path: str | Path) -> bytes:
 
 
 def create_tls13_context(ca_bundle_path: str | Path) -> ssl.SSLContext:
-    """Build a TLS-client context trusting only the registered CA bytes."""
+    """Build the registered TLS context (v0.1.6: 1.2 floor, 1.3 ceiling, AEAD-only)."""
 
     reject_ambient_network_environment()
-    if not hasattr(ssl.TLSVersion, "TLSv1_3"):
+    if not hasattr(ssl.TLSVersion, "TLSv1_3") or not hasattr(ssl.TLSVersion, "TLSv1_2"):
         _raise(BoundaryErrorCode.TLS_POLICY)
     ca_bytes = load_registered_ca_bundle(ca_bundle_path)
     try:
         ca_text = ca_bytes.decode("ascii", errors="strict")
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.maximum_version = ssl.TLSVersion.TLSv1_3
+        context.set_ciphers(TLS12_AEAD_CIPHERS)
         context.check_hostname = True
         context.verify_mode = ssl.CERT_REQUIRED
         context.options |= ssl.OP_NO_COMPRESSION
@@ -479,7 +490,7 @@ def create_tls13_context(ca_bundle_path: str | Path) -> ssl.SSLContext:
     except (UnicodeError, ValueError, ssl.SSLError):
         _raise(BoundaryErrorCode.TLS_POLICY)
     if (
-        context.minimum_version is not ssl.TLSVersion.TLSv1_3
+        context.minimum_version is not ssl.TLSVersion.TLSv1_2
         or context.maximum_version is not ssl.TLSVersion.TLSv1_3
         or context.check_hostname is not True
         or context.verify_mode != ssl.CERT_REQUIRED
@@ -933,7 +944,7 @@ def validate_transport_attempt(value: Mapping[str, object]) -> TransportAttemptR
     decoded_hash = _strict_text(value["decompressed_sha256"], maximum_bytes=64)
     if (
         _HEX64.fullmatch(leaf_hash) is None
-        or tls_version != TLS_VERSION
+        or tls_version not in TLS_VERSIONS
         or _HEX64.fullmatch(wire_hash) is None
         or _HEX64.fullmatch(decoded_hash) is None
     ):
@@ -1069,7 +1080,8 @@ _LIMITS_ITEMS: Final[tuple[tuple[str, object], ...]] = (
     ("redirects_max", REDIRECTS_MAX),
     ("peer_port", PEER_PORT),
     ("ca_bundle_bytes", CA_BUNDLE_BYTES),
-    ("tls_version", TLS_VERSION),
+    ("tls_version_min", TLS_VERSION_MIN),
+    ("tls_version_max", TLS_VERSION_MAX),
     ("ca_bundle_sha256", CA_BUNDLE_SHA256),
     ("allowed_hostnames", ALLOWED_HOSTNAMES),
 )

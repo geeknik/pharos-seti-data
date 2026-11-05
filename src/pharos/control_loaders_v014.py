@@ -193,8 +193,10 @@ def _verify_packaged_prereg(root: Path, manifest: Mapping[str, object]) -> None:
     if digest != PREREGISTRATION_SHA256 or size != PREREGISTRATION_BYTES:
         raise ValueError("packaged pre-registration is not byte-identical to frozen input")
     entries = manifest["incorporated_pre_registrations"]
-    if not isinstance(entries, list) or len(entries) != 2:
-        raise ValueError("manifest must incorporate exactly two pre-registrations")
+    if not isinstance(entries, list) or len(entries) != len(
+        INCORPORATED_PREREGISTRATION_SHA256S
+    ):
+        raise ValueError("manifest must incorporate every frozen predecessor")
     for entry, digest, size in zip(
         entries, INCORPORATED_PREREGISTRATION_SHA256S, INCORPORATED_PREREGISTRATION_BYTES, strict=True
     ):

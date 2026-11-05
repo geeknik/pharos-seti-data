@@ -265,6 +265,14 @@ def validate_transport_attempts(
         for key in ("http_status", "error_code"):
             if pd.isna(row[key]):
                 row[key] = None
+        # DataFrame rows carry numpy scalars; the strict boundary consumes
+        # ordinary Python types only.
+        for key, value in list(row.items()):
+            if hasattr(value, "item") and not isinstance(value, (str, bytes)):
+                try:
+                    row[key] = value.item()
+                except (AttributeError, ValueError):
+                    pass
         status_value = row["http_status"]
         if isinstance(status_value, float):
             row["http_status"] = int(status_value)

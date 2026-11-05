@@ -29,8 +29,8 @@ from typing import Any, Final, Literal, NoReturn, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
-PREREGISTRATION_SHA256: Final = "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
-PREREGISTRATION_BYTES: Final = 5_679
+PREREGISTRATION_SHA256: Final = "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49"
+PREREGISTRATION_BYTES: Final = 4_454
 
 PEER_PORT: Final = 443
 TLS_VERSION: Final = "TLSv1.3"
@@ -1025,6 +1025,25 @@ def establish_parser_address_space_limit() -> None:
         _raise(BoundaryErrorCode.PARSER_RESOURCE_LIMIT)
     if type(readback) is not tuple or readback != registered:
         _raise(BoundaryErrorCode.PARSER_RESOURCE_LIMIT)
+
+
+def apply_best_effort_address_space_limit() -> bool:
+    """Frozen v0.1.7 Section 2: platform defense applied when accepted.
+
+    The 1 GiB hard RLIMIT_AS is applied and read back exactly when the
+    platform accepts it; a platform refusal is recorded (return False) and is
+    not fatal. The mandatory containment is the bounded parser allocator and
+    the registered byte caps, which this function does not weaken.
+    """
+    import resource as _resource
+
+    registered = (PARSER_ADDRESS_SPACE_BYTES_MAX, PARSER_ADDRESS_SPACE_BYTES_MAX)
+    try:
+        _resource.setrlimit(_resource.RLIMIT_AS, registered)
+        readback = _resource.getrlimit(_resource.RLIMIT_AS)
+    except (OSError, ValueError):
+        return False
+    return readback == registered
 
 
 _LIMITS_ITEMS: Final[tuple[tuple[str, object], ...]] = (

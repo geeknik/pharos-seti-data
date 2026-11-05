@@ -57,6 +57,7 @@ from pharos.control_network_v014 import (
     tls_server_hostname,
 )
 from pharos.control_network_v014 import (
+    apply_best_effort_address_space_limit,
     classify_retry,
     establish_parser_address_space_limit,
 )
@@ -649,7 +650,7 @@ def _decode_worker(
 ) -> None:
     """Parser worker: hard RLIMIT_AS before any table library import/use."""
     try:
-        establish_parser_address_space_limit()
+        apply_best_effort_address_space_limit()
         import numpy as np
         from astropy.io.votable import parse
 

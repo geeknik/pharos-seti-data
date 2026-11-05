@@ -186,6 +186,7 @@ def test_incorporated_preregistrations_are_pinned_to_frozen_digests() -> None:
     """Frozen v0.1.5 Section 2.2: exactly v0.1.4 then v0.1.3, hash-bound."""
     V5 = "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d"
     entries = [
+        {"path": f"pre_registration.v0.1.6.{V6}.md", "byte_sha256": V6},
         {"path": f"pre_registration.v0.1.5.{V5}.md", "byte_sha256": V5},
         {"path": f"pre_registration.v0.1.4.{V4}.md", "byte_sha256": V4},
         {"path": f"pre_registration.v0.1.3.{V3}.md", "byte_sha256": V3},
@@ -193,7 +194,7 @@ def test_incorporated_preregistrations_are_pinned_to_frozen_digests() -> None:
     base: dict[str, object] = {"incorporated_pre_registrations": entries}
     manifests._validate_incorporated_preregistration(base)
     for mutation in (
-        {"incorporated_pre_registrations": entries[:2]},
+        {"incorporated_pre_registrations": entries[:3]},
         {"incorporated_pre_registrations": list(reversed(entries))},
         {"incorporated_pre_registrations": [{"path": "../escape.md", "byte_sha256": V4}, *entries[1:]]},
         {"incorporated_pre_registrations": [dict(entries[0], byte_sha256="0" * 64), *entries[1:]]},
@@ -276,7 +277,7 @@ def test_review_attestation_cannot_pass_empty_trust_root() -> None:
         "candidate_commit": "1" * 40,
         "candidate_manifest_path": "controls/checkpoint_manifest.yaml",
         "candidate_manifest_byte_sha256": "2" * 64,
-        "pre_registration_byte_sha256": "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650",
+        "pre_registration_byte_sha256": "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49",
         "reviewer_identity": "reviewer",
         "reviewer_signing_key_sha256": "3" * 64,
         "reviewed_at_utc": "2026-08-06T00:00:00.000000Z",

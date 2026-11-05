@@ -42,8 +42,8 @@ from pharos.control_population_v014 import (
 )
 from pharos.control_provenance_v014 import producer_identity, repository_root
 
-FREEZE_COMMIT: Final = "f23c5539621abddfac1194a8ffc9b731c6e592d8"
-PREREGISTRATION_RELATIVE: Final = Path("pre_registration/v0.1.6_tls_policy_repair.md")
+FREEZE_COMMIT: Final = "90fbea1d45e3573f65ed9eee827c91b65699ad49"
+PREREGISTRATION_RELATIVE: Final = Path("pre_registration/v0.1.7_parser_containment_repair.md")
 FROZEN_RELATIVE: Final = Path("pre_registration/FROZEN.md")
 
 
@@ -56,15 +56,15 @@ class PreflightResult:
 def verify_frozen_registration() -> None:
     root = repository_root()
     prereg = root / PREREGISTRATION_RELATIVE
-    if prereg.stat(follow_symlinks=False).st_size != 5_679 or sha256_file(prereg) != (
-        "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
+    if prereg.stat(follow_symlinks=False).st_size != 4_454 or sha256_file(prereg) != (
+        "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49"
     ):
-        raise RuntimeError("frozen v0.1.6 pre-registration bytes do not match")
+        raise RuntimeError("frozen v0.1.7 pre-registration bytes do not match")
     frozen = (root / FROZEN_RELATIVE).read_text(encoding="utf-8")
-    if "5,679 bytes" not in frozen or (
+    if "4,454 bytes" not in frozen or (
         "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d" not in frozen
     ):
-        raise RuntimeError("FROZEN.md does not bind the registered v0.1.6 bytes")
+        raise RuntimeError("FROZEN.md does not bind the registered v0.1.7 bytes")
     ancestry = subprocess.run(
         ["git", "merge-base", "--is-ancestor", FREEZE_COMMIT, "HEAD"],
         cwd=root,

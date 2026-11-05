@@ -225,7 +225,7 @@ Expected output:
 | Date frozen | 2026-11-05 |
 | Status | FROZEN |
 | Supersedes | the transport TLS policy provisions of the effective protocol only (TLS 1.3 mandatory; evidence and limits fields pinned to TLSv1.3) |
-| Superseded by | (none) |
+| Superseded by | v0.1.7 (parser containment only) |
 
 ### Freeze record
 
@@ -259,4 +259,43 @@ Expected output:
 ```text
 54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650  pre_registration/v0.1.6_tls_policy_repair.md
 5f4e96eefda12aea3b8ab4e1fefdaafe007dbbb3e533cf145ac3f89f86d28c6c  pre_registration/failed_attempts/v0.1.5_gaia_tls13_endpoint_refusal.md
+```
+
+---
+
+## v0.1.7 — Parser Containment Repair
+
+| Field | Value |
+|---|---|
+| Document | [`v0.1.7_parser_containment_repair.md`](v0.1.7_parser_containment_repair.md) |
+| Date frozen | 2026-11-05 |
+| Status | FROZEN |
+| Supersedes | the parser-worker address-space sentence of the effective protocol only (hard RLIMIT_AS 1 GiB, fatal if unenforceable) |
+| Superseded by | (none) |
+
+### Freeze record
+
+| Stage | Date | File size | SHA-256 |
+|---|---|---:|---|
+| Initial freeze | 2026-11-05 | 4,454 bytes | `62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49` |
+
+### Supporting disposition record
+
+The first v0.1.6 attempt completed the entire first transport chain (submit,
+poll, job document, 236,436-byte VOTable result) and then failed closed in the
+decode worker: macOS 27.3 refuses any finite RLIMIT_AS, making the inherited
+equality check unenforceable on the registered platform. Its immutable record:
+
+| Field | Value |
+|---|---|
+| Document | [`failed_attempts/v0.1.6_parser_address_space_unenforceable.md`](failed_attempts/v0.1.6_parser_address_space_unenforceable.md) |
+| Date recorded | 2026-11-05 |
+| Status | FAILED AFTER TRANSPORT, BEFORE DECODE — no data entered derivation |
+| File size | 1,760 bytes |
+| SHA-256 | `880fb3344bd64fb6df8575e9474039b9996ff3b07426587fb08743238390d8ae` |
+
+### Verification command
+
+```sh
+shasum -a 256 pre_registration/v0.1.7_parser_containment_repair.md pre_registration/failed_attempts/v0.1.6_parser_address_space_unenforceable.md
 ```

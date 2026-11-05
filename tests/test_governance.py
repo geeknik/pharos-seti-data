@@ -10,8 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-FROZEN_BYTES = 10057
-FROZEN_SHA256 = "487b74515748f814c66303e03c451ad260fe90935e76009c8cfd182a34402720"
+FROZEN_BYTES = 11578
+FROZEN_SHA256 = "64bffb2e94bac6c3ddc4269a1c7389d54c078855b7fddb0aa95ae077efa3d06c"
 
 PROTECTED_PREREGISTRATION = {
     "pre_registration/FROZEN.md": (
@@ -57,6 +57,14 @@ PROTECTED_PREREGISTRATION = {
     "pre_registration/v0.1.6_tls_policy_repair.md": (
         5679,
         "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650",
+    ),
+    "pre_registration/v0.1.7_parser_containment_repair.md": (
+        4454,
+        "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49",
+    ),
+    "pre_registration/failed_attempts/v0.1.6_parser_address_space_unenforceable.md": (
+        1760,
+        "880fb3344bd64fb6df8575e9474039b9996ff3b07426587fb08743238390d8ae",
     ),
     "pre_registration/v0.1_ir_benchmark.md": (
         10494,
@@ -161,6 +169,15 @@ def test_status_is_strict_and_fail_closed() -> None:
         "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
     )
     assert v016["supersedes"] == "v0.1.5 (transport TLS policy only)"
+
+    v017 = status["attempts"]["v0_1_7"]
+    assert v017["preregistration_state"] == "frozen"
+    assert v017["implementation_state"] == "not_started"
+    assert v017["acquisition_state"] == "prohibited"
+    assert v017["preregistration_sha256"] == (
+        "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49"
+    )
+    assert v017["supersedes"] == "v0.1.6 (parser containment only)"
 
     audit = status["dependency_audit"]
     assert audit["passed"] is True

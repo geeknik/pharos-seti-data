@@ -80,6 +80,15 @@ preregistration_bytes = 5679
 preregistration_sha256 = "54f7d67ffedc931c9784308aac9be325bd2644aaa0ed1391f1b4293c3fa2a650"
 supersedes = "v0.1.5 (transport TLS policy only)"
 
+[attempts.v0_1_7]
+preregistration_state = "frozen"
+implementation_state = "not_started"
+acquisition_state = "prohibited"
+preregistration = "pre_registration/v0.1.7_parser_containment_repair.md"
+preregistration_bytes = 4454
+preregistration_sha256 = "62f1b74efd85fb6f36203094c27a947bf2a16e77c0b5ee428a749e55142aeb49"
+supersedes = "v0.1.6 (parser containment only)"
+
 [dependency_audit]
 passed = true
 checked_at_utc = "2026-11-05T01:40:00Z"

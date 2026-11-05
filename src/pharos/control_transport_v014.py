@@ -511,7 +511,18 @@ def _run_with_retries(
                 result.leaf_certificate_sha256 if result else "0" * 64
             ),
             exchange=result,
-            error_code=None if succeeded else (error_code or decision.error_code),
+            error_code=(
+                None
+                if succeeded
+                else (
+                    error_code
+                    if error_code is None
+                    or not error_code.startswith("http_")
+                    or error_code
+                    in ("http_429", "http_502", "http_503", "http_504")
+                    else "other"
+                )
+            ),
         )
         if decision.disposition is not RetryDisposition.RETRY:
             import logging

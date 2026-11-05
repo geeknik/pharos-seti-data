@@ -311,6 +311,7 @@ class TransportJournal:
             TRANSPORT_COLUMNS
         ):
             raise ValueError("transport evidence columns do not match the registered schema")
+        frame = frame.astype({"http_status": "Int64"})
         return frame
 
 

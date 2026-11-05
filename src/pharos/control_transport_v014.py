@@ -680,7 +680,8 @@ def _decode_worker(
                 frame[name] = series.astype(bool)
             elif logical == "string":
                 frame[name] = series.astype("string")
-        frame = frame.replace({np.nan: None})
+        # Nullable floats keep NaN as the registered null marker; the
+        # normalizer validates float64 dtypes with NaN-nullable domains.
         connection_sender.send(("ok", frame))
     except BaseException as exc:  # worker reports failures through the pipe only
         connection_sender.send(("error", f"{type(exc).__name__}: {exc}"))

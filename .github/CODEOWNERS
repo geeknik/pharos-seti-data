@@ -1,0 +1,8 @@
+# Protected scientific governance and trust boundaries.
+/AGENTS.md @geeknik
+/status.toml @geeknik
+/docs/scientific_standards.md @geeknik
+/pre_registration/** @geeknik
+/tests/test_governance.py @geeknik
+/.github/workflows/** @geeknik
+/.github/CODEOWNERS @geeknik

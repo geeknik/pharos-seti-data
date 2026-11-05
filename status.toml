@@ -1,0 +1,59 @@
+schema_version = "pharos.project-status.v1"
+as_of_utc = "2026-11-04T23:38:58Z"
+scientific_state_commit = "246679d4e77d672679a46d23daaa7de6d9d11795"
+
+[governance]
+operator_edit_only = true
+scientific_standards = "docs/scientific_standards.md"
+freeze_record = "pre_registration/FROZEN.md"
+codeowners = ".github/CODEOWNERS"
+governance_test = "tests/test_governance.py"
+
+[authorization]
+catalog_acquisition = false
+checkpoint_creation = false
+external_exclusion_requests = false
+model_fit = false
+source_scoring = false
+scientific_release = false
+public_candidate_announcement = false
+git_push = false
+website_deploy = false
+
+[release]
+latest_public_version = "v0.1.0"
+latest_public_class = "pilot_benchmark"
+latest_public_fully_conformant = false
+release_manifest = "docs/release_manifest_v0.1.0.md"
+
+[attempts.v0_1_1]
+state = "failed_did_not_ship"
+active_rules = false
+
+[attempts.v0_1_2]
+state = "quarantined_did_not_ship"
+reuse_allowed = false
+failure_record = "pre_registration/failed_attempts/v0.1.2_hardened_control_population.md"
+
+[attempts.v0_1_3]
+preregistration_state = "frozen"
+implementation_state = "blocked"
+acquisition_state = "prohibited"
+preregistration = "pre_registration/v0.1.3_control_population.md"
+preregistration_bytes = 87851
+preregistration_sha256 = "b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43"
+authorized_reviewer_signing_key_sha256 = []
+blockers = [
+  "raw_and_release_producers_require_distinct_source_distributions_but_final_schema_permits_one",
+  "authorized_reviewer_trust_root_is_empty",
+  "locked_dependency_audit_fails",
+]
+required_supersession = "v0.1.4"
+
+[dependency_audit]
+passed = false
+checked_at_utc = "2026-11-04T23:38:58Z"
+finding_count = 17
+runtime_packages = ["certifi==2026.7.22", "urllib3==2.7.0"]
+development_packages = ["filelock==3.32.2", "msgpack==1.2.1"]
+certifi_identity_frozen_in_v0_1_3 = true

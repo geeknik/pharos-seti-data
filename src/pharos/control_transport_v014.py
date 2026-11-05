@@ -527,6 +527,7 @@ def execute_tap_async(
         spool_basename=f"{logical_request_id}.submit",
         ca_bundle_path=ca_bundle_path,
         exchange_callable=submit_exchange,
+        allow_location_status=True,
     )
     location = submit.headers.get("Location") or submit.headers.get("location")
     if not location:

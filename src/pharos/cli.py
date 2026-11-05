@@ -1,6 +1,9 @@
 """Command-line entry points for Pharos data and benchmark workflows.
 
-There is no authorized production control-population build command. The only
+The frozen v0.1.4 workflow exposes separate local preflight, acquisition-role
+gate, candidate-review, and registered-release loading commands.  The reviewer
+trust root is intentionally empty, so every acquisition and scientific load
+fails closed until a prospective authorized workflow establishes it.  The only
 v0.1.2 acquisition path is an explicitly named failed-pilot reproduction that
 writes a failed/non-authorizing manifest to fixed ignored quarantine paths.
 
@@ -35,6 +38,8 @@ from pharos import (
     calibration,
     contaminants,
     control_population,
+    control_loaders_v014,
+    control_workflow_v014,
     fdr_report,
     injection,
     ir_sed,
@@ -56,21 +61,13 @@ _REGISTRY_OVERRIDE_COLUMNS: dict[str, str] = {
 }
 
 
-def _configure_logging(verbosity: int) -> None:
-    level = logging.WARNING - 10 * verbosity
-    logging.basicConfig(
-        level=max(level, logging.DEBUG),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-
-
 def cmd_fetch_quiet_negative(args: argparse.Namespace) -> int:
+    """Historical raw fetch helper; deliberately not authorized by the parser."""
     output = Path(args.output).resolve()
     logger.warning(
         "fetch_quiet_negative produces a raw candidate pool; the registered "
         "BP/RP and external-catalog exclusions must run before calibration"
     )
-    logger.info("fetching quiet-negative controls -> %s (limit=%s)", output, args.limit)
     result = sources.fetch_quiet_negative_controls(
         cache_path=output, limit=args.limit, use_cache=not args.force_refresh
     )
@@ -80,6 +77,14 @@ def cmd_fetch_quiet_negative(args: argparse.Namespace) -> int:
         result.query_hash[:12],
     )
     return 0
+
+
+def _configure_logging(verbosity: int) -> None:
+    level = logging.WARNING - 10 * verbosity
+    logging.basicConfig(
+        level=max(level, logging.DEBUG),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
 
 def _resolve_repository_relative_path(value: str, *, label: str) -> tuple[Path, str]:
@@ -98,6 +103,82 @@ def _resolve_repository_relative_path(value: str, *, label: str) -> tuple[Path, 
     if not resolved.is_relative_to(repository_root):
         raise ValueError(f"{label} resolves outside the repository")
     return resolved, relative.as_posix()
+
+
+def _v014_publication_parent(value: str) -> Path:
+    parent, _ = _resolve_repository_relative_path(value, label="publication_parent")
+    return parent
+
+
+def cmd_v014_control_preflight(args: argparse.Namespace) -> int:
+    """Run the frozen local checks without creating an attempt or using a network."""
+    try:
+        parent = _v014_publication_parent(args.publication_parent)
+        result = control_workflow_v014.preflight(publication_parent=parent)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        logger.error("v0.1.4 local preflight rejected: %s", type(exc).__name__)
+        return 2
+    if not result.passed:
+        print("status: blocked")
+        for blocker in result.blockers:
+            print(f"blocker: {blocker}")
+        return 2
+    print("status: passed")
+    return 0
+
+
+def cmd_v014_control_acquire(args: argparse.Namespace) -> int:
+    """Gate the dedicated Gaia acquisition role; never open a socket here."""
+    try:
+        parent = _v014_publication_parent(args.publication_parent)
+        control_workflow_v014.require_acquisition_preflight(publication_parent=parent)
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        logger.error("v0.1.4 acquisition role blocked: %s", type(exc).__name__)
+        return 2
+    logger.error("v0.1.4 acquisition role has no in-process network transport")
+    return 2
+
+
+def cmd_v014_review_candidate(args: argparse.Namespace) -> int:
+    """Load one unregistered candidate under the identical clean producer tree."""
+    try:
+        candidate, _ = _resolve_repository_relative_path(args.candidate_dir, label="candidate_dir")
+        loaded = control_loaders_v014.load_candidate_for_review(candidate)
+    except (OSError, PermissionError, RuntimeError, TypeError, ValueError) as exc:
+        logger.error("v0.1.4 candidate review rejected: %s", type(exc).__name__)
+        return 2
+    print("status: review_only")
+    print(f"manifest_sha256: {loaded.manifest_sha256}")
+    print("trusted: false")
+    return 0
+
+
+def cmd_v014_load_registered_raw(args: argparse.Namespace) -> int:
+    """Load one exact registered raw checkpoint for the release worker."""
+    try:
+        repository = Path(__file__).resolve().parents[2]
+        loaded = control_loaders_v014.load_registered_raw_checkpoint(args.entry_id, repository)
+    except (OSError, PermissionError, RuntimeError, TypeError, ValueError) as exc:
+        logger.error("v0.1.4 registered raw checkpoint rejected: %s", type(exc).__name__)
+        return 2
+    print("status: authorized")
+    print(f"registry_entry_id: {loaded.registry_entry_id}")
+    print(f"manifest_sha256: {loaded.manifest_sha256}")
+    return 0
+
+
+def cmd_v014_load_registered_final(args: argparse.Namespace) -> int:
+    """Run the exact-registry scientific loader with no review-mode fallback."""
+    try:
+        repository = Path(__file__).resolve().parents[2]
+        loaded = control_loaders_v014.load_registered_final_release(args.entry_id, repository)
+    except (OSError, PermissionError, RuntimeError, TypeError, ValueError) as exc:
+        logger.error("v0.1.4 registered final release rejected: %s", type(exc).__name__)
+        return 2
+    print("status: authorized")
+    print(f"registry_entry_id: {loaded.registry_entry_id}")
+    print(f"manifest_sha256: {loaded.manifest_sha256}")
+    return 0
 
 
 def cmd_reproduce_failed_v012_pilot(args: argparse.Namespace) -> int:
@@ -169,9 +250,7 @@ def cmd_run_injection_recovery(args: argparse.Namespace) -> int:
     except (FileNotFoundError, TypeError, ValueError) as exc:
         logger.error("refusing nonconformant controls: %s", exc)
         return 2
-    controls = ir_sed.add_stratification_bins(
-        ir_sed.add_color_indices(release.controls)
-    )
+    controls = ir_sed.add_stratification_bins(ir_sed.add_color_indices(release.controls))
 
     result = injection.run_injection_recovery(
         controls,
@@ -318,9 +397,7 @@ def cmd_run_fdr_report(args: argparse.Namespace) -> int:
     except (FileNotFoundError, TypeError, ValueError) as exc:
         logger.error("refusing nonconformant controls: %s", exc)
         return 2
-    controls = ir_sed.add_stratification_bins(
-        ir_sed.add_color_indices(release.controls)
-    )
+    controls = ir_sed.add_stratification_bins(ir_sed.add_color_indices(release.controls))
 
     result = fdr_report.run_fdr_report(
         controls,
@@ -372,26 +449,61 @@ def cmd_fetch_hephaistos(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="pharos", description="Pharos data fetches and historical benchmark tools."
+        prog="pharos",
+        description="Pharos versioned control workflows and historical benchmark tools.",
     )
     parser.add_argument("-v", "--verbose", action="count", default=0)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    qn = subparsers.add_parser(
-        "fetch_quiet_negative", help="Fetch the quiet-negative control population from Gaia."
+    v014_preflight = subparsers.add_parser(
+        "v014_control_preflight",
+        help="Run frozen v0.1.4 local checks without an attempt or network access.",
     )
-    qn.add_argument("--output", required=True, help="Path to write the parquet cache.")
-    qn.add_argument(
-        "--limit",
-        type=int,
-        default=50_000,
+    v014_preflight.add_argument(
+        "--publication-parent",
+        default="controls/checkpoints/quiet_negative_v0.1.4",
+        help="Existing repository-relative parent for a future Gaia candidate.",
+    )
+    v014_preflight.set_defaults(func=cmd_v014_control_preflight)
+
+    v014_acquire = subparsers.add_parser(
+        "v014_control_acquire",
         help=(
-            "Maximum raw candidate rows to fetch (default 50000, the frozen "
-            "v0.1 minimum before required post-query exclusions)."
+            "Enter the fail-closed Gaia acquisition role gate; the catalog network is "
+            "available only to the dedicated isolated worker."
         ),
     )
-    qn.add_argument("--force-refresh", action="store_true", help="Ignore any existing cache.")
-    qn.set_defaults(func=cmd_fetch_quiet_negative)
+    v014_acquire.add_argument(
+        "--publication-parent",
+        default="controls/checkpoints/quiet_negative_v0.1.4",
+        help="Existing repository-relative parent for the Gaia candidate.",
+    )
+    v014_acquire.set_defaults(func=cmd_v014_control_acquire)
+
+    v014_review = subparsers.add_parser(
+        "v014_review_candidate",
+        help="Load an unregistered v0.1.4 candidate in review-only mode.",
+    )
+    v014_review.add_argument(
+        "--candidate-dir",
+        required=True,
+        help="Repository-relative candidate directory; symlinks are rejected.",
+    )
+    v014_review.set_defaults(func=cmd_v014_review_candidate)
+
+    v014_raw = subparsers.add_parser(
+        "v014_load_registered_raw",
+        help="Verify and load one exact trusted v0.1.4 raw-checkpoint registry entry.",
+    )
+    v014_raw.add_argument("--entry-id", required=True, help="Exact immutable registry ID.")
+    v014_raw.set_defaults(func=cmd_v014_load_registered_raw)
+
+    v014_final = subparsers.add_parser(
+        "v014_load_registered_final",
+        help="Verify and load one exact trusted v0.1.4 final-release registry entry.",
+    )
+    v014_final.add_argument("--entry-id", required=True, help="Exact immutable registry ID.")
+    v014_final.set_defaults(func=cmd_v014_load_registered_final)
 
     qn_v012 = subparsers.add_parser(
         "reproduce_failed_v012_pilot",

@@ -785,6 +785,12 @@ def decode_votable_table(
     process.start()
     sender.close()
     try:
+        deadline = time.monotonic() + 600
+        while not receiver.poll(5):
+            if time.monotonic() >= deadline:
+                process.terminate()
+                process.join(timeout=10)
+                raise NetworkBoundaryError(BoundaryErrorCode.PARSER_RESOURCE_LIMIT)
         status, payload = receiver.recv()
     finally:
         receiver.close()

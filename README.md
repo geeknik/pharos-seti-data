@@ -17,7 +17,8 @@ This repository contains the methodology, scoring code, control populations, and
 | v0.1.0 | IR / Astrometric Confounder Benchmark | Released pilot; post-release conformance gaps documented |
 | v0.1.1 | Global β calibration + X-ray attenuation | Failed registered attempt; did not ship |
 | v0.1.2 | Subtype-aware confounders + X-ray evidence | Hardened control pilot failed scientific conformance; artifacts quarantined; did not ship |
-| v0.1.3 | Hardened quiet-negative control population | Prospective draft only; not frozen; acquisition prohibited |
+| v0.1.3 | Hardened quiet-negative control population | Preregistration frozen; implementation blocked; acquisition prohibited |
+| v0.1.4 | Producer-provenance repair of the control protocol | Prospective supersession required; not registered |
 | v0.2 | Time-domain integration (TESS, Kepler, ZTF) | Not started |
 | v0.3 | Radio coverage (Breakthrough Listen, COSMIC) | Not started |
 | v0.4 | Spectral residual integration (HIRES, HARPS, LAMOST) | Not started |
@@ -27,11 +28,11 @@ v0.1.0 passed its Hephaistos classification, synthetic-injection, and held-out-n
 
 The failed v0.1.1 attempt is preserved under [`pre_registration/failed_attempts/`](pre_registration/failed_attempts/). Its fitted weights and X-ray attenuation rule are not active. The later v0.1.2 hardened control-population pilot also **did not ship**: it used scientifically material population-selection rules that were not prospectively registered. Its data and manifests remain quarantined and must not be used for fitting, calibration, ranking, or release. See the exact [v0.1.2 non-release record](pre_registration/failed_attempts/v0.1.2_hardened_control_population.md).
 
-The prospective replacement is [v0.1.3](pre_registration/v0.1.3_control_population.md). It is currently a draft, not a frozen registration or build authorization. No v0.1.3 catalog query, acquisition, checkpoint, exclusion request, or model operation may run until its reviewed bytes are recorded in `pre_registration/FROZEN.md` and committed by the procedure in that document.
+The prospective replacement is [v0.1.3](pre_registration/v0.1.3_control_population.md). Its reviewed bytes are frozen in [`pre_registration/FROZEN.md`](pre_registration/FROZEN.md) (87,851 bytes, SHA-256 `b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43`), but the protocol is not executable as frozen: the final artifact schema requires distinct raw-checkpoint and final-release producers while permitting only one embedded source distribution, the authorized-reviewer signing-key trust root is empty, and the locked dependency audit fails. No v0.1.3 catalog query, acquisition, checkpoint, exclusion request, or model operation may run. A prospective v0.1.4 supersession must repair the producer-provenance model and the reviewer trust root before implementation; see [`docs/v0.1.3-experimental-scaffold.md`](docs/v0.1.3-experimental-scaffold.md).
 
 ### Control-population execution status
 
-There is currently no authorized control-population build command. The old v0.1.2 command would reproduce a quarantined failed pilot, not a release, and is intentionally not documented as an executable workflow. After v0.1.3 is approved and frozen, implementation and fresh acquisition must follow its candidate, independent-review, review-evidence-commit, and registry-commit sequence exactly. Pilot rows, cursors, response tables, and allow-list entries are prohibited inputs.
+There is currently no authorized control-population build command. The old v0.1.2 command would reproduce a quarantined failed pilot, not a release, and is intentionally not documented as an executable workflow. v0.1.3 is frozen but blocked; implementation and fresh acquisition must wait for a prospective v0.1.4 supersession and then follow its candidate, independent-review, review-evidence-commit, and registry-commit sequence exactly. Pilot rows, cursors, response tables, and allow-list entries are prohibited inputs.
 
 ## Repository Layout
 

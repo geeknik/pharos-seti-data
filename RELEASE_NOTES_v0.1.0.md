@@ -5,6 +5,8 @@
 
 > **Post-release audit notice (2026-08-05):** The three executed benchmark families below passed, but v0.1.0 did not satisfy every frozen release requirement. The quiet-negative cache contains 2,451 sources rather than the registered minimum of 50,000; the registered magnitude-binned BP/RP-excess and external SIMBAD/debris-disk exclusions were not applied; and the Zenodo payload omits several registered derived tables and the reproduction notebook. v0.1.0 is therefore a released pilot benchmark, not a fully conformant catalog release. The immutable payload and gaps are recorded in [`docs/release_manifest_v0.1.0.md`](docs/release_manifest_v0.1.0.md).
 
+> **Current status pointer (2026-11-04):** The "Next" list below is historical text from the v0.1.0 release and is superseded by later events. v0.1.1 failed its registered attempt and did not ship; the v0.1.2 hardened control-population pilot failed scientific conformance and its artifacts are quarantined; the v0.1.3 control-population protocol is frozen but blocked before acquisition (producer-provenance schema contradiction, empty reviewer signing-key trust root, failing dependency audit), pending a prospective v0.1.4 supersession. Current authority: [`status.toml`](status.toml), [`pre_registration/FROZEN.md`](pre_registration/FROZEN.md), and the repository [`README.md`](README.md).
+
 ## What v0.1 establishes
 
 Pharos v0.1 is the wedge release of the Technosignature Lead Graph: an end-to-end pipeline that takes Gaia DR3 + AllWISE + 2MASS archival data and produces a confounder-penalised re-observation ranking within the WISE-only coverage class. The release demonstrates that the system can **demote seductive false positives before promoting anything**.

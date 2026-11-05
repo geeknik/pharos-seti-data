@@ -304,7 +304,7 @@ The `pre_registration/` directory is the scientific hygiene anchor. Geometry pri
 
 *Outputs:* `ir_evidence`, `wise_confusion_score`, `distance_discrepancy_noparallax_z` (for sources with external spectroscopy), `confounder_vector`, and a ranked IR lead list with empirical p-values and BH q-values within the WISE-coverage class.
 
-*Implementation status:* v0.1.0 was published as a pilot benchmark. Its Hephaistos, injection-recovery, and held-out-null checks passed on the archived fixtures, but a post-release audit found that the quiet-negative population and artifact payload did not fully satisfy the frozen registration. See `docs/release_manifest_v0.1.0.md`. The failed v0.1.1 attempt did not ship; v0.1.2 pre-registers the replacement confounder/X-ray semantics.
+*Implementation status:* v0.1.0 was published as a pilot benchmark. Its Hephaistos, injection-recovery, and held-out-null checks passed on the archived fixtures, but a post-release audit found that the quiet-negative population and artifact payload did not fully satisfy the frozen registration. See `docs/release_manifest_v0.1.0.md`. The failed v0.1.1 attempt did not ship. The v0.1.2 hardened pilot failed scientific conformance and is quarantined; the v0.1.3 control-population protocol is frozen but blocked before acquisition, pending a prospective v0.1.4 supersession.
 
 ### v0.2 — Time-Domain Integration
 Add TESS/Kepler per-transit residual scores and ZTF dipper scores. Build `calibration_positive` set for time-domain channel. Confirm that quiet-negative controls score near zero in time-domain modality (within covered epochs only) and that Boyajian's Star processes correctly as a high-anomaly, ambiguous-confounder source that lands in `needs_human_review`, not `ir_followup`.

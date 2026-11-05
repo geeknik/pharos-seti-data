@@ -63,3 +63,9 @@ gaia_credentials*
 *credentials.txt
 *credentials.toml
 secrets/
+
+# Operational scratch handoff — never a scientific or public artifact.
+HANDOFF.md
+
+# Local agent/tool workspace state.
+.zcode/

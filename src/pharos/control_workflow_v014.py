@@ -41,6 +41,7 @@ from pharos.control_population_v014 import (
     simbad_upload,
 )
 from pharos.control_provenance_v014 import producer_identity, repository_root
+from pharos.control_schemas_v014 import GAIA_TABLE_COLUMNS
 
 FREEZE_COMMIT: Final = "90fbea1d45e3573f65ed9eee827c91b65699ad49"
 PREREGISTRATION_RELATIVE: Final = Path("pre_registration/v0.1.7_parser_containment_repair.md")
@@ -321,7 +322,13 @@ def run_gaia_acquisition(
             attempt_directory=attempt_directory,
             ca_bundle_path=ca_bundle_path,
         )
-        decoded = transport.decode_votable_table(spool, GAIA_COLUMNS)
+        decoded = transport.decode_votable_table(
+            spool,
+            tuple(
+                (column.name, column.logical, column.nullable)
+                for column in GAIA_TABLE_COLUMNS
+            ),
+        )
         session = session.accept(plan, decoded)
     append_state_event(
         state_path,

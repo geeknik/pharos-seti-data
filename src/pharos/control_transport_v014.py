@@ -644,10 +644,10 @@ def execute_tap_async(
 
 def _decode_worker(
     spool_path: str,
-    expected_columns: Sequence[str],
+    expected_columns: Sequence[tuple[str, str, bool]],
     connection_sender,
 ) -> None:
-    """Parser worker: hard RLIMIT_AS before any table library import/use."""
+    """Parser worker: containment before any table library import/use."""
     try:
         apply_best_effort_address_space_limit()
         import numpy as np
@@ -655,24 +655,31 @@ def _decode_worker(
 
         # verify="warn": astropy unit-string pedantry (e.g. log(cm.s**-2)) must
         # not reject an otherwise well-formed table; structural strictness is
-        # enforced below by the exact column/row contract and downstream gates.
+        # enforced below by the exact column/type contract and downstream gates.
         table = parse(spool_path, verify="warn").get_first_table().to_table(
             use_names_over_ids=True
         )
         frame = table.to_pandas()
-        for column in frame.columns:
-            if str(frame[column].dtype) == "object":
-                frame[column] = frame[column].astype("string")
-            elif str(frame[column].dtype) == "float32":
-                frame[column] = frame[column].astype("float64")
-            # Integer columns (notably the 19-digit gaia_dr3_source_id) keep
-            # int64: a float64 cast would silently lose exactness past 2^53.
-            # Masked integer columns arrive from astropy as float64 with NaN
-            # and are validated as nullable values by the registered schema.
-        if tuple(frame.columns) != tuple(expected_columns):
+        if tuple(frame.columns) != tuple(name for name, _, _ in expected_columns):
             raise ValueError(
                 f"decoded columns {tuple(frame.columns)} do not match registered query output"
             )
+        for name, logical, nullable in expected_columns:
+            series = frame[name]
+            if logical == "float64":
+                frame[name] = pd.to_numeric(series, errors="raise").astype("float64")
+            elif logical == "int64":
+                numeric = pd.to_numeric(series, errors="raise")
+                if numeric.isna().any():
+                    if not nullable:
+                        raise ValueError(f"{name} has nulls but is registered non-null")
+                    frame[name] = numeric.astype("Int64").astype("int64")
+                else:
+                    frame[name] = numeric.astype("int64")
+            elif logical == "bool":
+                frame[name] = series.astype(bool)
+            elif logical == "string":
+                frame[name] = series.astype("string")
         frame = frame.replace({np.nan: None})
         connection_sender.send(("ok", frame))
     except BaseException as exc:  # worker reports failures through the pipe only
@@ -682,9 +689,9 @@ def _decode_worker(
 
 
 def decode_votable_table(
-    spool_path: Path, expected_columns: Sequence[str]
+    spool_path: Path, expected_columns: Sequence[tuple[str, str, bool]]
 ) -> pd.DataFrame:
-    """Decode a spooled VOTable in a fresh limited worker; exact columns only."""
+    """Decode a spooled VOTable in a fresh limited worker; exact typed columns."""
     context = multiprocessing.get_context("spawn")
     receiver, sender = context.Pipe(duplex=False)
     process = context.Process(

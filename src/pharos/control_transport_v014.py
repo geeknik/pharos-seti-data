@@ -365,8 +365,18 @@ def _run_with_retries(
         result, status, error_code = exchange_callable(spool_name)
         finished = _utc_now()
         received = result.wire_bytes if result else 0
+        succeeded = result is not None and (
+            200 <= result.status < 300
+            or (
+                allow_location_status
+                and result.status in (301, 302, 303, 307, 308)
+                and (result.headers.get("Location") or result.headers.get("location"))
+            )
+        )
         failure_kind = (
-            FailureKind.OTHER if succeeded else (
+            FailureKind.OTHER
+            if succeeded
+            else (
                 FailureKind.HTTP_STATUS if result is not None else _failure_kind(error_code)
             )
         )
@@ -375,14 +385,6 @@ def _run_with_retries(
             operation_attempt=operation_attempt,
             response_bytes_received=received,
             http_status=status,
-        )
-        succeeded = result is not None and (
-            200 <= result.status < 300
-            or (
-                allow_location_status
-                and result.status in (301, 302, 303, 307, 308)
-                and (result.headers.get("Location") or result.headers.get("location"))
-            )
         )
         outcome = (
             "success"

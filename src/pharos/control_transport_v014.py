@@ -443,8 +443,13 @@ def _run_with_retries(
     """Execute one transport phase under the exact frozen retry policy."""
     hostname = policy_host(service)
     operation_attempt = 1
+    # Resumed requests must not collide with spool files written by earlier
+    # processes of the same attempt; offset try-numbers by prior evidence.
+    prior_attempts = len(
+        [record for record in journal.records if record.logical_request_id == logical_request_id]
+    )
     while operation_attempt <= TRANSPORT_ATTEMPTS_MAX:
-        spool_name = f"{spool_basename}.try{operation_attempt}"
+        spool_name = f"{spool_basename}.try{operation_attempt + prior_attempts}"
         started = _utc_now()
         result, status, error_code = exchange_callable(spool_name)
         finished = _utc_now()

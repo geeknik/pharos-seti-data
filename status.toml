@@ -1,6 +1,6 @@
 schema_version = "pharos.project-status.v1"
 as_of_utc = "2026-11-05T01:30:00Z"
-scientific_state_commit = "246679d4e77d672679a46d23daaa7de6d9d11795"
+scientific_state_commit = "07ca855920cb2209d7f9c78794fa85671e2793d3"
 
 [governance]
 operator_edit_only = true
@@ -63,9 +63,9 @@ authorized_reviewer_signing_key_sha256 = [
 supersedes = "v0.1.3 (enumerated provisions only)"
 
 [dependency_audit]
-passed = false
-checked_at_utc = "2026-11-04T23:38:58Z"
-finding_count = 17
-runtime_packages = ["certifi==2026.7.22", "urllib3==2.7.0"]
-development_packages = ["filelock==3.32.2", "msgpack==1.2.1"]
+passed = true
+checked_at_utc = "2026-11-05T01:40:00Z"
+finding_count = 0
+remediated_by = "pre_registration/v0.1.4_control_population.md Section 5.3"
+remediated_versions = ["certifi==2026.10.18", "urllib3==2.8.0", "filelock==4.2.1", "msgpack==1.2.3"]
 certifi_identity_frozen_in_v0_1_3 = true

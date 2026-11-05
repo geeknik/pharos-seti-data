@@ -130,8 +130,14 @@ def test_status_is_strict_and_fail_closed() -> None:
     assert v014["supersedes"] == "v0.1.3 (enumerated provisions only)"
 
     audit = status["dependency_audit"]
-    assert audit["passed"] is False
-    assert audit["finding_count"] == 17
+    assert audit["passed"] is True
+    assert audit["finding_count"] == 0
+    assert audit["remediated_versions"] == [
+        "certifi==2026.10.18",
+        "urllib3==2.8.0",
+        "filelock==4.2.1",
+        "msgpack==1.2.3",
+    ]
     assert audit["certifi_identity_frozen_in_v0_1_3"] is True
 
 

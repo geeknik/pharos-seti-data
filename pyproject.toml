@@ -50,6 +50,20 @@ Manuscript = "https://pharos-seti.org/manuscript"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# Security constraints registered by the frozen v0.1.4 pre-registration
+# (pre_registration/v0.1.4_control_population.md Section 5.3): the 2026-11-04
+# audit found 17 advisories across these four transitive packages; the exact
+# remediation versions are registered there and must not drift in the lock.
+# certifi's identity additionally pins the CA bundle (234,072 bytes,
+# sha256 d87887200c9a705dccc937b9b83b5e67e47024c4a4b7f9dd15700c72e0f55453).
+[tool.uv]
+constraint-dependencies = [
+    "certifi==2026.10.18",
+    "urllib3==2.8.0",
+    "filelock==4.2.1",
+    "msgpack==1.2.3",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

@@ -373,12 +373,24 @@ def _run_with_retries(
                 and (result.headers.get("Location") or result.headers.get("location"))
             )
         )
-        failure_kind = (
-            FailureKind.OTHER
-            if succeeded
-            else (
-                FailureKind.HTTP_STATUS if result is not None else _failure_kind(error_code)
+        if succeeded:
+            assert result is not None
+            journal._append(
+                logical_request_id=logical_request_id,
+                phase=phase,
+                started=started,
+                finished=finished,
+                outcome="success",
+                status=status,
+                hostname=hostname,
+                peer_ip=result.peer_ip,
+                leaf_certificate_sha256=result.leaf_certificate_sha256,
+                exchange=result,
+                error_code=None,
             )
+            return result
+        failure_kind = (
+            FailureKind.HTTP_STATUS if result is not None else _failure_kind(error_code)
         )
         decision = classify_retry(
             failure_kind=failure_kind,
@@ -387,13 +399,9 @@ def _run_with_retries(
             http_status=status,
         )
         outcome = (
-            "success"
-            if succeeded
-            else (
-                "retryable_failure"
-                if decision.disposition is RetryDisposition.RETRY
-                else "fatal_failure"
-            )
+            "retryable_failure"
+            if decision.disposition is RetryDisposition.RETRY
+            else "fatal_failure"
         )
         journal._append(
             logical_request_id=logical_request_id,
@@ -410,9 +418,6 @@ def _run_with_retries(
             exchange=result,
             error_code=None if succeeded else (error_code or decision.error_code),
         )
-        if succeeded:
-            assert result is not None
-            return result
         if decision.disposition is not RetryDisposition.RETRY:
             raise NetworkBoundaryError(BoundaryErrorCode.RETRY_POLICY)
         time.sleep(decision.wait_seconds or 0)

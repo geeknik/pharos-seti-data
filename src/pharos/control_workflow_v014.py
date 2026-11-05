@@ -354,6 +354,9 @@ def run_gaia_acquisition(
     if journal_path.is_file():
         journal = transport.TransportJournal.load(attempt_id, journal_path)
         session = _rebuild_session_from_spool(transport, attempt_directory, journal, attempt_id)
+        import dataclasses
+
+        session = dataclasses.replace(session, attempt_id=str(attempt_id))
     else:
         journal = transport.TransportJournal(attempt_id, persist_path=journal_path)
     while True:

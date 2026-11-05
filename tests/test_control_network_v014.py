@@ -66,9 +66,9 @@ def _valid_transport_row() -> dict[str, object]:
 
 
 def test_frozen_identity_endpoints_timeouts_and_resource_constants_are_exact() -> None:
-    assert network.PREREGISTRATION_BYTES == 17_714
+    assert network.PREREGISTRATION_BYTES == 5_925
     assert network.PREREGISTRATION_SHA256 == (
-        "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b"
+        "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d"
     )
     assert tuple(network.ENDPOINT_POLICIES) == ("gaia", "simbad", "chen")
     assert [policy.endpoint for policy in network.ENDPOINT_POLICIES.values()] == [

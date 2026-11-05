@@ -29,8 +29,8 @@ from typing import Any, Final, Literal, NoReturn, cast
 from urllib.parse import urlsplit
 from uuid import UUID
 
-PREREGISTRATION_SHA256: Final = "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b"
-PREREGISTRATION_BYTES: Final = 17_714
+PREREGISTRATION_SHA256: Final = "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d"
+PREREGISTRATION_BYTES: Final = 5_925
 
 PEER_PORT: Final = 443
 TLS_VERSION: Final = "TLSv1.3"

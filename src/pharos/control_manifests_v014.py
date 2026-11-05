@@ -16,7 +16,8 @@ import yaml
 
 from pharos.control_artifacts_v014 import validate_relative_path
 from pharos.control_population_v014 import (
-    INCORPORATED_PREREGISTRATION_SHA256,
+    INCORPORATED_PREREGISTRATION_SHA256S,
+    PREREGISTRATION_BYTES,
     PREREGISTRATION_SHA256,
 )
 from pharos.control_provenance_v014 import canonical_json
@@ -145,8 +146,7 @@ CHECKPOINT_KEYS: Final = (
     "pre_registration_path",
     "pre_registration_byte_sha256",
     "pre_registration_bytes",
-    "incorporated_pre_registration_path",
-    "incorporated_pre_registration_byte_sha256",
+    "incorporated_pre_registrations",
     "created_at_utc",
     "raw_producer",
     "catalog_releases",
@@ -166,8 +166,7 @@ FINAL_KEYS: Final = (
     "pre_registration_path",
     "pre_registration_byte_sha256",
     "pre_registration_bytes",
-    "incorporated_pre_registration_path",
-    "incorporated_pre_registration_byte_sha256",
+    "incorporated_pre_registrations",
     "created_at_utc",
     "raw_checkpoint_manifest_path",
     "raw_checkpoint_manifest_byte_sha256",
@@ -421,14 +420,20 @@ def validate_raw_producer_reference(value: object) -> Mapping[str, object]:
 
 
 def _validate_incorporated_preregistration(record: Mapping[str, object]) -> None:
-    """Frozen v0.1.4 Section 5.5: the packaged v0.1.3 copy is hash-bound."""
-    validate_relative_path(str(record["incorporated_pre_registration_path"]))
-    if _hex(
-        record["incorporated_pre_registration_byte_sha256"],
-        64,
-        "incorporated pre-registration hash",
-    ) != INCORPORATED_PREREGISTRATION_SHA256:
-        raise ValueError("incorporated v0.1.3 pre-registration digest mismatch")
+    """Frozen v0.1.5 Section 2.2: the packaged v0.1.4 and v0.1.3 copies are
+    hash-bound as an ordered two-entry list."""
+    entries = record["incorporated_pre_registrations"]
+    if not isinstance(entries, list) or len(entries) != 2:
+        raise ValueError("incorporated pre-registrations must list exactly two entries")
+    for entry, registered in zip(entries, INCORPORATED_PREREGISTRATION_SHA256S, strict=True):
+        if not isinstance(entry, dict) or tuple(entry.keys()) != (
+            "path",
+            "byte_sha256",
+        ):
+            raise ValueError("incorporated entry has missing or extra keys")
+        validate_relative_path(str(entry["path"]))
+        if _hex(entry["byte_sha256"], 64, "incorporated hash") != registered:
+            raise ValueError("incorporated pre-registration digest mismatch")
 
 
 def validate_limits(value: object) -> None:
@@ -451,7 +456,7 @@ def validate_checkpoint_manifest(value: object) -> Mapping[str, object]:
         != PREREGISTRATION_SHA256
     ):
         raise ValueError("pre-registration digest mismatch")
-    if record["pre_registration_bytes"] != 17714:
+    if record["pre_registration_bytes"] != PREREGISTRATION_BYTES:
         raise ValueError("pre-registration size mismatch")
     _validate_incorporated_preregistration(record)
     _timestamp(record["created_at_utc"])
@@ -477,7 +482,7 @@ def validate_final_manifest(value: object) -> Mapping[str, object]:
     _uuid4(record["attempt_id"])
     if (
         record["pre_registration_byte_sha256"] != PREREGISTRATION_SHA256
-        or record["pre_registration_bytes"] != 17714
+        or record["pre_registration_bytes"] != PREREGISTRATION_BYTES
     ):
         raise ValueError("final pre-registration binding mismatch")
     _validate_incorporated_preregistration(record)

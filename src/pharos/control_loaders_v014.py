@@ -26,7 +26,7 @@ from pharos.control_manifests_v014 import (
 )
 from pharos.control_population_v014 import (
     INCORPORATED_PREREGISTRATION_BYTES,
-    INCORPORATED_PREREGISTRATION_SHA256,
+    INCORPORATED_PREREGISTRATION_SHA256S,
     PREREGISTRATION_BYTES,
     PREREGISTRATION_SHA256,
 )
@@ -192,12 +192,16 @@ def _verify_packaged_prereg(root: Path, manifest: Mapping[str, object]) -> None:
     digest, size = _hash_contained(root, relative)
     if digest != PREREGISTRATION_SHA256 or size != PREREGISTRATION_BYTES:
         raise ValueError("packaged pre-registration is not byte-identical to frozen input")
-    incorporated = str(manifest["incorporated_pre_registration_path"])
-    inc_digest, inc_size = _hash_contained(root, incorporated)
-    if inc_digest != INCORPORATED_PREREGISTRATION_SHA256 or inc_size != (
-        INCORPORATED_PREREGISTRATION_BYTES
+    entries = manifest["incorporated_pre_registrations"]
+    if not isinstance(entries, list) or len(entries) != 2:
+        raise ValueError("manifest must incorporate exactly two pre-registrations")
+    for entry, digest, size in zip(
+        entries, INCORPORATED_PREREGISTRATION_SHA256S, INCORPORATED_PREREGISTRATION_BYTES, strict=True
     ):
-        raise ValueError("packaged v0.1.3 pre-registration is not byte-identical")
+        path = str(entry["path"])
+        found_digest, found_size = _hash_contained(root, path)
+        if found_digest != digest or found_size != size:
+            raise ValueError("packaged incorporated pre-registration is not byte-identical")
 
 
 def _verify_raw_reference_against_checkpoint(

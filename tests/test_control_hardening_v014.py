@@ -13,6 +13,9 @@ from pharos import control_loaders_v014 as loaders
 from pharos import control_manifests_v014 as manifests
 from pharos import trusted_control_releases_v014 as trust
 
+V4 = "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b"
+V3 = "b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43"
+
 
 @pytest.mark.parametrize("directory", ["", "."])
 def test_content_addressed_parquet_can_be_written_at_candidate_root(
@@ -179,21 +182,19 @@ def test_raw_producer_reference_requires_checkpoint_binding() -> None:
             manifests.validate_raw_producer_reference(mutation)
 
 
-def test_incorporated_preregistration_is_pinned_to_frozen_v013_digest() -> None:
-    """Frozen v0.1.4 Section 5.5: only the incorporated v0.1.3 digest binds."""
-    base: dict[str, object] = {
-        "incorporated_pre_registration_path": (
-            "pre_registration.v0.1.3."
-            "b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43.md"
-        ),
-        "incorporated_pre_registration_byte_sha256": (
-            "b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43"
-        ),
-    }
+def test_incorporated_preregistrations_are_pinned_to_frozen_digests() -> None:
+    """Frozen v0.1.5 Section 2.2: exactly v0.1.4 then v0.1.3, hash-bound."""
+    entries = [
+        {"path": f"pre_registration.v0.1.4.{V4}.md", "byte_sha256": V4},
+        {"path": f"pre_registration.v0.1.3.{V3}.md", "byte_sha256": V3},
+    ]
+    base: dict[str, object] = {"incorporated_pre_registrations": entries}
     manifests._validate_incorporated_preregistration(base)
     for mutation in (
-        dict(base, incorporated_pre_registration_byte_sha256="0" * 64),
-        dict(base, incorporated_pre_registration_path="../escape.md"),
+        {"incorporated_pre_registrations": entries[:1]},
+        {"incorporated_pre_registrations": list(reversed(entries))},
+        {"incorporated_pre_registrations": [{"path": "../escape.md", "byte_sha256": V4}, entries[1]]},
+        {"incorporated_pre_registrations": [dict(entries[0], byte_sha256="0" * 64), entries[1]]},
     ):
         with pytest.raises(ValueError):
             manifests._validate_incorporated_preregistration(mutation)
@@ -273,7 +274,7 @@ def test_review_attestation_cannot_pass_empty_trust_root() -> None:
         "candidate_commit": "1" * 40,
         "candidate_manifest_path": "controls/checkpoint_manifest.yaml",
         "candidate_manifest_byte_sha256": "2" * 64,
-        "pre_registration_byte_sha256": "ecc752928a179f9d533997349f722ca5eb9dee1ccbc9635ead865a207b64a96b",
+        "pre_registration_byte_sha256": "7c14f53fbf4883c0ba0cb941c547a4e3a3d545a53d1dd16b5bcc72bbdd97ec2d",
         "reviewer_identity": "reviewer",
         "reviewer_signing_key_sha256": "3" * 64,
         "reviewed_at_utc": "2026-08-06T00:00:00.000000Z",

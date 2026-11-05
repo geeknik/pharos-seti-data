@@ -35,7 +35,7 @@ from pharos.control_population_v014 import (
     GAIA_DECODED_SCHEMA,
     GAIA_NORMALIZED_SCHEMA,
     GAIA_QUERY_TEMPLATE,
-    INCORPORATED_PREREGISTRATION_SHA256,
+    INCORPORATED_PREREGISTRATION_SHA256S,
     PREREGISTRATION_BYTES,
     PREREGISTRATION_SHA256,
     RAW_SCHEMA,
@@ -242,24 +242,33 @@ def publish_gaia_checkpoint(
         manifest_name="checkpoint_manifest.yaml",
     )
     try:
-        prereg = (repository_root() / "pre_registration/v0.1.4_control_population.md").read_bytes()
+        prereg = (repository_root() / "pre_registration/v0.1.5_platform_repair.md").read_bytes()
         packaged_prereg = _write_text(
             writer,
-            f"pre_registration.v0.1.4.{PREREGISTRATION_SHA256}.md",
+            f"pre_registration.v0.1.5.{PREREGISTRATION_SHA256}.md",
             prereg,
-            schema_version="pharos.pre-registration.v0.1.4",
+            schema_version="pharos.pre-registration.v0.1.5",
         )
-        # Frozen v0.1.4 Section 5.5: package the incorporated v0.1.3 document
-        # byte-identically so the effective protocol is self-contained.
-        incorporated = (
-            repository_root() / "pre_registration/v0.1.3_control_population.md"
-        ).read_bytes()
-        incorporated_prereg = _write_text(
-            writer,
-            "pre_registration.v0.1.3.b6ba49cc17743eabe9f32b930f318dfe93d3e6778a4c41f4023a850545bfae43.md",
-            incorporated,
-            schema_version="pharos.pre-registration.v0.1.3",
-        )
+        # Frozen v0.1.5 Section 2.2: package the incorporated v0.1.4 and
+        # v0.1.3 documents byte-identically so the effective protocol is
+        # self-contained from the release tree alone.
+        incorporated_preregs = []
+        for version, digest in (
+            ("v0.1.4", INCORPORATED_PREREGISTRATION_SHA256S[0]),
+            ("v0.1.3", INCORPORATED_PREREGISTRATION_SHA256S[1]),
+        ):
+            stem = {
+                "v0.1.4": "v0.1.4_control_population.md",
+                "v0.1.3": "v0.1.3_control_population.md",
+            }[version]
+            incorporated_preregs.append(
+                _write_text(
+                    writer,
+                    f"pre_registration.{version}.{digest}.md",
+                    (repository_root() / "pre_registration" / stem).read_bytes(),
+                    schema_version="pharos.pre-registration.{version}",
+                )
+            )
         software, _ = _software_payloads(writer, identity, ca_bundle_path=ca_bundle_path)
         return _finish_gaia_checkpoint(
             writer=writer,
@@ -269,7 +278,7 @@ def publish_gaia_checkpoint(
             transport_attempts=transport_attempts,
             attempt_state_bytes=attempt_state_bytes,
             packaged_prereg=packaged_prereg,
-            incorporated_prereg=incorporated_prereg,
+            incorporated_preregs=tuple(incorporated_preregs),
             software=software,
         )
     except BaseException:
@@ -288,7 +297,7 @@ def _finish_gaia_checkpoint(
     transport_attempts: pd.DataFrame,
     attempt_state_bytes: bytes,
     packaged_prereg: ArtifactIdentity,
-    incorporated_prereg: ArtifactIdentity,
+    incorporated_preregs: tuple[ArtifactIdentity, ...],
     software: dict[str, ArtifactIdentity],
 ) -> Path:
     request_evidence: list[tuple[ArtifactIdentity, ArtifactIdentity, ArtifactIdentity]] = []
@@ -419,8 +428,12 @@ def _finish_gaia_checkpoint(
         "pre_registration_path": packaged_prereg.path,
         "pre_registration_byte_sha256": PREREGISTRATION_SHA256,
         "pre_registration_bytes": PREREGISTRATION_BYTES,
-        "incorporated_pre_registration_path": incorporated_prereg.path,
-        "incorporated_pre_registration_byte_sha256": INCORPORATED_PREREGISTRATION_SHA256,
+        "incorporated_pre_registrations": [
+            {"path": item.path, "byte_sha256": digest}
+            for item, digest in zip(
+                incorporated_preregs, INCORPORATED_PREREGISTRATION_SHA256S, strict=True
+            )
+        ],
         "created_at_utc": retrieved,
         "raw_producer": producer,
         "catalog_releases": catalog_releases,
@@ -429,7 +442,9 @@ def _finish_gaia_checkpoint(
         "transport_attempt_count": len(transport_attempts),
         "artifacts": {
             "packaged_pre_registration": _descriptor(packaged_prereg, "raw"),
-            "incorporated_pre_registration": _descriptor(incorporated_prereg, "raw"),
+            "incorporated_pre_registrations": [
+                _descriptor(item, "raw") for item in incorporated_preregs
+            ],
             "source_distribution": source_descriptor,
             "uv_lock": _descriptor(software["uv_lock"], "raw"),
             "toolchain": _descriptor(software["toolchain"], "raw"),

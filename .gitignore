@@ -70,3 +70,6 @@ HANDOFF.md
 # Local agent/tool workspace state.
 .zcode/
 .cloudflare/
+
+# v0.1.4 acquisition attempt spool/state (local quarantine, never release payloads)
+controls/attempts/

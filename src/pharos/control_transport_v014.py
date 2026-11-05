@@ -144,10 +144,93 @@ class _ExchangeResult:
 class TransportJournal:
     """Accumulates exact transport-attempt evidence rows in global order."""
 
-    def __init__(self, attempt_id: str) -> None:
+    def __init__(self, attempt_id: str, persist_path: Path | None = None) -> None:
         self._attempt_id = attempt_id
         self._records: list[TransportAttemptRecord] = []
         self._per_request_ordinals: dict[str, int] = {}
+        self._persist_path = persist_path
+
+    @classmethod
+    def load(cls, attempt_id: str, persist_path: Path) -> "TransportJournal":
+        """Reload a durably recorded journal for a registered same-attempt
+        resume (frozen Section 13); ordinals continue per logical request."""
+        import json as _json
+
+        journal = cls(attempt_id, persist_path)
+        if persist_path.is_file():
+            for line in persist_path.read_text(encoding="utf-8").splitlines():
+                item = _json.loads(line)
+                record = TransportAttemptRecord(
+                    attempt_id=item["attempt_id"],
+                    logical_request_id=item["logical_request_id"],
+                    transport_ordinal=item["transport_ordinal"],
+                    phase=item["phase"],
+                    started_at=datetime.fromisoformat(item["started_at"]),
+                    finished_at=datetime.fromisoformat(item["finished_at"]),
+                    outcome=item["outcome"],
+                    http_status=item["http_status"],
+                    expected_hostname=item["expected_hostname"],
+                    peer_ip=item["peer_ip"],
+                    peer_port=item["peer_port"],
+                    leaf_certificate_sha256=item["leaf_certificate_sha256"],
+                    tls_version=item["tls_version"],
+                    redirect_count=item["redirect_count"],
+                    wire_bytes=item["wire_bytes"],
+                    decompressed_bytes=item["decompressed_bytes"],
+                    wire_sha256=item["wire_sha256"],
+                    decompressed_sha256=item["decompressed_sha256"],
+                    error_code=item["error_code"],
+                )
+                journal._records.append(record)
+                key = record.logical_request_id
+                journal._per_request_ordinals[key] = max(
+                    journal._per_request_ordinals.get(key, 0), record.transport_ordinal
+                )
+        return journal
+
+    def _persist(self, record: TransportAttemptRecord) -> None:
+        import json as _json
+        import os as _os
+
+        if self._persist_path is None:
+            return
+        payload = {
+            field: (
+                getattr(record, field).isoformat()
+                if isinstance(getattr(record, field), datetime)
+                else getattr(record, field)
+            )
+            for field in (
+                "attempt_id",
+                "logical_request_id",
+                "transport_ordinal",
+                "phase",
+                "started_at",
+                "finished_at",
+                "outcome",
+                "http_status",
+                "expected_hostname",
+                "peer_ip",
+                "peer_port",
+                "leaf_certificate_sha256",
+                "tls_version",
+                "redirect_count",
+                "wire_bytes",
+                "decompressed_bytes",
+                "wire_sha256",
+                "decompressed_sha256",
+                "error_code",
+            )
+        }
+        flags = _os.O_WRONLY | _os.O_APPEND | _os.O_CREAT | getattr(_os, "O_NOFOLLOW", 0)
+        fd = _os.open(self._persist_path, flags, 0o600)
+        try:
+            with _os.fdopen(fd, "ab", closefd=False) as output:
+                output.write(_json.dumps(payload).encode("utf-8") + b"\n")
+                output.flush()
+                _os.fsync(output.fileno())
+        finally:
+            _os.close(fd)
 
     @property
     def records(self) -> tuple[TransportAttemptRecord, ...]:
@@ -170,8 +253,7 @@ class TransportJournal:
     ) -> None:
         ordinal = self._per_request_ordinals.get(logical_request_id, 0) + 1
         self._per_request_ordinals[logical_request_id] = ordinal
-        self._records.append(
-            TransportAttemptRecord(
+        record = TransportAttemptRecord(
                 attempt_id=self._attempt_id,
                 logical_request_id=logical_request_id,
                 transport_ordinal=ordinal,
@@ -192,7 +274,8 @@ class TransportJournal:
                 decompressed_sha256=exchange.decompressed_sha256 if exchange else ("0" * 64),
                 error_code=error_code,
             )
-        )
+        self._records.append(record)
+        self._persist(record)
 
     def to_frame(self) -> pd.DataFrame:
         if not self._records:

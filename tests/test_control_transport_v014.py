@@ -69,8 +69,10 @@ class _FakeTransport:
         self.pages: dict[str, pd.DataFrame] = {}
         self.next_id = {ordinal: (ordinal + 1) * 1_000_000 + 1 for ordinal in range(24)}
 
-    def TransportJournal(self, attempt_id: str) -> transport.TransportJournal:  # noqa: N802
-        self.journal = transport.TransportJournal(attempt_id)
+    def TransportJournal(  # noqa: N802
+        self, attempt_id: str, persist_path: Path | None = None
+    ) -> transport.TransportJournal:
+        self.journal = transport.TransportJournal(attempt_id, persist_path=persist_path)
         return self.journal
 
     def execute_tap_async(

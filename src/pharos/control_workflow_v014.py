@@ -264,6 +264,39 @@ def stage_registered_ca_bundle(repository: Path) -> Path:
     return destination
 
 
+def _rebuild_session_from_spool(
+    transport: Any,
+    attempt_directory: Path,
+    journal: Any,
+    attempt_id: str,
+) -> Any:
+    """Registered Section 13 resume: replay every durably evidenced complete
+    page under the same attempt id, planner, and canonical order."""
+    from pharos.control_schemas_v014 import GAIA_TABLE_COLUMNS
+
+    completed = {
+        record.logical_request_id
+        for record in journal.records
+        if record.phase == "fetch" and record.outcome == "success"
+    }
+    column_types = tuple(
+        (column.name, column.logical_type, column.nullable)
+        for column in GAIA_TABLE_COLUMNS
+    )
+    session = GaiaAcquisitionSession.create()
+    while True:
+        plan = session.next_request()
+        if plan is None or plan.logical_request_id not in completed:
+            return session
+        candidates = sorted(
+            attempt_directory.glob(f"{plan.logical_request_id}.result.try*")
+        )
+        if not candidates:
+            raise ValueError(f"resume missing spooled result for {plan.logical_request_id}")
+        decoded = transport.decode_votable_table(candidates[-1], column_types)
+        session = session.accept(plan, decoded)
+
+
 def run_gaia_acquisition(
     *,
     publication_parent: Path,
@@ -308,7 +341,12 @@ def run_gaia_acquisition(
         actor_role="gaia_acquisition_worker",
         evidence_semantic_sha256=evidence_init,
     )
-    journal = transport.TransportJournal(attempt_id)
+    journal_path = attempt_directory / "transport_journal.jsonl"
+    if journal_path.is_file():
+        journal = transport.TransportJournal.load(attempt_id, journal_path)
+        session = _rebuild_session_from_spool(transport, attempt_directory, journal, attempt_id)
+    else:
+        journal = transport.TransportJournal(attempt_id, persist_path=journal_path)
     while True:
         plan = session.next_request()
         if plan is None:

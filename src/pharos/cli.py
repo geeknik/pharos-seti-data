@@ -144,6 +144,7 @@ def cmd_v014_control_acquire(args: argparse.Namespace) -> int:
         checkpoint_path, attempt_id = control_workflow_v014.run_gaia_acquisition(
             publication_parent=parent,
             ca_bundle_path=ca_bundle,
+            attempt_id=getattr(args, "attempt_id", None),
         )
     except (OSError, RuntimeError, TypeError, ValueError, PermissionError) as exc:
         logger.error("v0.1.4 acquisition role blocked: %s", type(exc).__name__)
@@ -491,6 +492,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--publication-parent",
         default="controls/checkpoints/quiet_negative_v0.1.4",
         help="Existing repository-relative parent for the Gaia candidate.",
+    )
+    v014_acquire.add_argument(
+        "--attempt-id",
+        default=None,
+        help="Resume this registered attempt id from its durable journal (Section 13).",
     )
     v014_acquire.set_defaults(func=cmd_v014_control_acquire)
 

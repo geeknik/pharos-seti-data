@@ -315,32 +315,41 @@ def run_gaia_acquisition(
 
     publication_parent = publication_parent.resolve(strict=True)
     require_acquisition_preflight(publication_parent=publication_parent)
-    session = GaiaAcquisitionSession.create()
-    attempt_id = attempt_id or session.attempt_id
-    if attempt_id != session.attempt_id:
-        raise ValueError("explicit attempt id must match the fresh session identity")
     attempts_root = publication_parent / "attempts"
     attempts_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    attempt_directory = attempts_root / attempt_id
-    attempt_directory.mkdir(mode=0o700)
+    resuming = attempt_id is not None and (attempts_root / attempt_id).is_dir()
+    session = GaiaAcquisitionSession.create()
+    if not resuming:
+        attempt_id = attempt_id or session.attempt_id
+        if attempt_id != session.attempt_id:
+            raise ValueError("explicit attempt id must match the fresh session identity")
+    attempt_directory = attempts_root / str(attempt_id)
+    if resuming:
+        if not attempt_directory.is_dir():
+            raise ValueError("resume attempt directory is missing")
+    else:
+        attempt_directory.mkdir(mode=0o700)
     state_path = attempt_directory / "attempt_state.jsonl"
-    evidence_init = __import__("hashlib").sha256(
-        b"pharos-v0.1.4:" + attempt_id.encode("ascii")
-    ).hexdigest()
-    append_state_event(
-        state_path,
-        attempt_id=attempt_id,
-        to_state="initialized",
-        actor_role="gaia_acquisition_worker",
-        evidence_semantic_sha256=evidence_init,
-    )
-    append_state_event(
-        state_path,
-        attempt_id=attempt_id,
-        to_state="gaia_acquiring",
-        actor_role="gaia_acquisition_worker",
-        evidence_semantic_sha256=evidence_init,
-    )
+    if not resuming:
+        assert attempt_id is not None
+        evidence_init = __import__("hashlib").sha256(
+            b"pharos-v0.1.4:" + attempt_id.encode("ascii")
+        ).hexdigest()
+        append_state_event(
+            state_path,
+            attempt_id=attempt_id,
+            to_state="initialized",
+            actor_role="gaia_acquisition_worker",
+            evidence_semantic_sha256=evidence_init,
+        )
+        append_state_event(
+            state_path,
+            attempt_id=attempt_id,
+            to_state="gaia_acquiring",
+            actor_role="gaia_acquisition_worker",
+            evidence_semantic_sha256=evidence_init,
+        )
+    assert attempt_id is not None
     journal_path = attempt_directory / "transport_journal.jsonl"
     if journal_path.is_file():
         journal = transport.TransportJournal.load(attempt_id, journal_path)

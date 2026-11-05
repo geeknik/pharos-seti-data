@@ -280,6 +280,7 @@ def run_gaia_acquisition(
     """
     from pharos import control_packaging_v014 as packaging
 
+    publication_parent = publication_parent.resolve(strict=True)
     require_acquisition_preflight(publication_parent=publication_parent)
     session = GaiaAcquisitionSession.create()
     attempt_id = attempt_id or session.attempt_id

@@ -653,15 +653,22 @@ def _decode_worker(
         import numpy as np
         from astropy.io.votable import parse
 
-        table = parse(spool_path, verify="exception").get_first_table().to_table(
+        # verify="warn": astropy unit-string pedantry (e.g. log(cm.s**-2)) must
+        # not reject an otherwise well-formed table; structural strictness is
+        # enforced below by the exact column/row contract and downstream gates.
+        table = parse(spool_path, verify="warn").get_first_table().to_table(
             use_names_over_ids=True
         )
         frame = table.to_pandas()
         for column in frame.columns:
             if str(frame[column].dtype) == "object":
                 frame[column] = frame[column].astype("string")
-            elif str(frame[column].dtype) in ("float32", "int32", "int64", "uint64"):
+            elif str(frame[column].dtype) == "float32":
                 frame[column] = frame[column].astype("float64")
+            # Integer columns (notably the 19-digit gaia_dr3_source_id) keep
+            # int64: a float64 cast would silently lose exactness past 2^53.
+            # Masked integer columns arrive from astropy as float64 with NaN
+            # and are validated as nullable values by the registered schema.
         if tuple(frame.columns) != tuple(expected_columns):
             raise ValueError(
                 f"decoded columns {tuple(frame.columns)} do not match registered query output"
